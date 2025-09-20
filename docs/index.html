@@ -92,12 +92,28 @@
         .footer a:hover {
             text-decoration: underline;
         }
+        .last-updated {
+            margin-top: 15px;
+            font-size: 14px;
+            color: var(--text-muted);
+            font-style: italic;
+        }
+        .last-updated-label {
+            font-weight: 600;
+        }
+        .last-updated-time {
+            font-weight: normal;
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>ARIN IPv4 Waitlist Dashboard</h1>
         <p>Real-time analysis of IPv4 address block waitlist and estimated wait times</p>
+        <p class="last-updated" id="lastUpdated" style="display: none;">
+            <span class="last-updated-label">Last Updated:</span>
+            <span class="last-updated-time" id="lastUpdatedTime"></span>
+        </p>
     </div>
 
 
@@ -276,6 +292,31 @@
             });
         }
 
+        // Function to update last updated timestamp
+        function updateLastUpdated(data) {
+            if (data.length === 0) return;
+
+            // Find the most recent timestamp (data is already sorted by timestamp)
+            const mostRecentEntry = data[data.length - 1];
+            const timestamp = new Date(mostRecentEntry.timestamp);
+
+            // Format in human-readable format
+            const options = {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZoneName: 'short'
+            };
+
+            const formattedTime = timestamp.toLocaleDateString('en-US', options);
+
+            // Update the DOM
+            document.getElementById('lastUpdatedTime').textContent = formattedTime;
+            document.getElementById('lastUpdated').style.display = 'block';
+        }
+
         // Load and process data
         async function loadData() {
             try {
@@ -294,6 +335,9 @@
                 // Hide loading, show charts
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('charts').style.display = 'block';
+
+                // Update last updated timestamp
+                updateLastUpdated(data);
 
                 // Create charts
                 createChart('waitlistChart', 'Current Waitlist Size Over Time', data, {
