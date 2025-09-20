@@ -9,6 +9,7 @@ import io
 import argparse
 import csv
 import sys
+import os
 from datetime import datetime
 
 # --- URLs for the data ---
@@ -98,12 +99,19 @@ def output_text(total_requests, requests_22, requests_23, requests_24,
 # Parse command line arguments
 args = parse_arguments()
 
+# Create data directory if it doesn't exist
+os.makedirs('data', exist_ok=True)
+
 # --- Step 1: Analyze Historical Data of Cleared Blocks ---
 
 try:
     # Fetch the historical data CSV from the URL
     response = requests.get(HISTORICAL_DATA_URL)
     response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+
+    # Save the historical CSV data to a local file
+    with open('data/historical_data.csv', 'w', encoding='utf-8') as f:
+        f.write(response.text)
 
     # Use io.StringIO to read the CSV content from the response text into pandas
     csv_file = io.StringIO(response.text)
@@ -140,6 +148,10 @@ try:
     # Fetch the waitlist JSON from the URL
     response = requests.get(CURRENT_WAITLIST_URL)
     response.raise_for_status() # Raise an exception for bad status codes
+
+    # Save the waitlist JSON data to a local file
+    with open('data/waitlist_data.json', 'w', encoding='utf-8') as f:
+        f.write(response.text)
 
     # Parse the JSON content from the response text
     waitlist_data = json.loads(response.text)
