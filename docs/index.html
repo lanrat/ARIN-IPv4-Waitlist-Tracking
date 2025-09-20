@@ -228,11 +228,12 @@
 
         // Function to create a chart
         function createChart(canvasId, title, data, valueColumns, yAxisLabel) {
-            const ctx = document.getElementById(canvasId).getContext('2d');
-            const datasets = createDatasets(data, valueColumns, '');
-            const themeColors = getThemeColors();
+            try {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                const datasets = createDatasets(data, valueColumns, '');
+                const themeColors = getThemeColors();
 
-            return new Chart(ctx, {
+                return new Chart(ctx, {
                 type: 'line',
                 data: { datasets },
                 options: {
@@ -256,11 +257,9 @@
                         x: {
                             type: 'time',
                             time: {
-                                unit: 'auto',
+                                unit: 'day',
                                 displayFormats: {
-                                    day: 'MMM dd',
-                                    month: 'MMM yyyy',
-                                    year: 'yyyy'
+                                    day: 'MMM dd, yyyy'
                                 }
                             },
                             title: {
@@ -292,31 +291,39 @@
                     }
                 }
             });
+            } catch (error) {
+                console.error(`Error creating chart ${canvasId}:`, error);
+                throw error;
+            }
         }
 
         // Function to update last updated timestamp
         function updateLastUpdated(data) {
             if (data.length === 0) return;
 
-            // Find the most recent timestamp (data is already sorted by timestamp)
-            const mostRecentEntry = data[data.length - 1];
-            const timestamp = new Date(mostRecentEntry.timestamp);
+            try {
+                // Find the most recent timestamp (data is already sorted by timestamp)
+                const mostRecentEntry = data[data.length - 1];
+                const timestamp = new Date(mostRecentEntry.timestamp);
 
-            // Format in human-readable format
-            const options = {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                timeZoneName: 'short'
-            };
+                // Format in human-readable format using toLocaleString instead
+                const formattedTime = timestamp.toLocaleString('en-US', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZoneName: 'short'
+                });
 
-            const formattedTime = timestamp.toLocaleDateString('en-US', options);
-
-            // Update the DOM
-            document.getElementById('lastUpdatedTime').textContent = formattedTime;
-            document.getElementById('lastUpdated').style.display = 'block';
+                // Update the DOM
+                document.getElementById('lastUpdatedTime').textContent = formattedTime;
+                document.getElementById('lastUpdated').style.display = 'block';
+            } catch (error) {
+                console.error('Error updating last updated timestamp:', error);
+                // Hide the last updated element if there's an error
+                document.getElementById('lastUpdated').style.display = 'none';
+            }
         }
 
         // Load and process data
