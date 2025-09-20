@@ -140,7 +140,14 @@
                 data.push(row);
             }
 
-            console.log('Parsed data:', data); // Debug output
+            // Sort data by timestamp to ensure proper chronological order
+            data.sort((a, b) => {
+                const dateA = new Date(a.timestamp);
+                const dateB = new Date(b.timestamp);
+                return dateA - dateB;
+            });
+
+            console.log('Parsed and sorted data:', data); // Debug output
             return data;
         }
 
