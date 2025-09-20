@@ -8,8 +8,10 @@
     "words": [
         "ARIN",
         "maximumcidr",
+        "minimumcidr",
         "rgba",
-        "waitlist"
+        "waitlist",
+        "waitlistactiondate"
     ],
     "ignoreWords": [],
     "import": []
