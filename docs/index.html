@@ -151,6 +151,19 @@
             font-weight: 600;
             font-size: 15px;
         }
+        .trend-up {
+            color: #ff6b6b;
+        }
+        .trend-down {
+            color: #4ecdc4;
+        }
+        .trend-stable {
+            color: var(--text-muted);
+        }
+        .trend-indicator {
+            margin-left: 5px;
+            font-size: 12px;
+        }
         @media (max-width: 768px) {
             .stats-grid {
                 grid-template-columns: 1fr;
@@ -245,12 +258,52 @@
                     <span class="stat-value" id="total-ips">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Largest block size:</span>
-                    <span class="stat-value" id="largest-block">/22 (1024 IPs)</span>
+                    <span class="stat-label">Most efficient block:</span>
+                    <span class="stat-value" id="most-efficient">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Smallest block size:</span>
-                    <span class="stat-value" id="smallest-block">/24 (256 IPs)</span>
+                    <span class="stat-label">Least efficient block:</span>
+                    <span class="stat-value" id="least-efficient">-</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>Market Share by Block Size</h3>
+                <div class="stat-item">
+                    <span class="stat-label">/22 blocks (by requests):</span>
+                    <span class="stat-value" id="market-22-requests">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">/23 blocks (by requests):</span>
+                    <span class="stat-value" id="market-23-requests">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">/24 blocks (by requests):</span>
+                    <span class="stat-value" id="market-24-requests">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Largest block demand:</span>
+                    <span class="stat-value" id="largest-demand">-</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>Historical Context</h3>
+                <div class="stat-item">
+                    <span class="stat-label">Total requests:</span>
+                    <span class="stat-value" id="total-trend">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Peak total requests:</span>
+                    <span class="stat-value" id="peak-total">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Net change rate:</span>
+                    <span class="stat-value" id="net-change">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Clearing efficiency:</span>
+                    <span class="stat-value" id="clearing-efficiency">-</span>
                 </div>
             </div>
         </div>
@@ -449,13 +502,38 @@
             return parseFloat(years).toFixed(1);
         }
 
+        // Function to format percentages
+        function formatPercentage(value, total) {
+            if (total === 0 || isNaN(value) || isNaN(total)) return '0.0%';
+            return ((value / total) * 100).toFixed(1) + '%';
+        }
+
+        // Function to calculate trend indicator
+        function getTrendIndicator(current, previous, reverse = false) {
+            if (previous === null || previous === undefined || current === previous) {
+                return '<span class="trend-indicator trend-stable">●</span>';
+            }
+            const isUp = current > previous;
+            const trend = reverse ? !isUp : isUp;
+            const arrow = trend ? '↗' : '↘';
+            const className = trend ? 'trend-up' : 'trend-down';
+            return `<span class="trend-indicator ${className}">${arrow}</span>`;
+        }
+
+        // Function to calculate block efficiency (IPs per year wait time)
+        function calculateBlockEfficiency(ips, waitYears) {
+            if (waitYears === 0 || waitYears === Infinity) return 0;
+            return ips / waitYears;
+        }
+
         // Function to calculate and display statistics
         function updateStatistics(data) {
             if (data.length === 0) return;
 
             try {
-                // Get the most recent data point
+                // Get the most recent data point and previous for trends
                 const latest = data[data.length - 1];
+                const previous = data.length > 1 ? data[data.length - 2] : null;
 
                 // Current waitlist counts
                 const req22 = parseInt(latest.requests_22) || 0;
@@ -483,6 +561,78 @@
                 const avgWait = totalRequests > 0 ?
                     ((wait22 * req22) + (wait23 * req23) + (wait24 * req24)) / totalRequests : 0;
 
+                // Block efficiency calculations (IPs per year)
+                const eff22 = calculateBlockEfficiency(1024, wait22);
+                const eff23 = calculateBlockEfficiency(512, wait23);
+                const eff24 = calculateBlockEfficiency(256, wait24);
+
+                const efficiencies = [
+                    { type: '/22', efficiency: eff22, ips: 1024 },
+                    { type: '/23', efficiency: eff23, ips: 512 },
+                    { type: '/24', efficiency: eff24, ips: 256 }
+                ].filter(e => e.efficiency > 0).sort((a, b) => b.efficiency - a.efficiency);
+
+                const mostEfficient = efficiencies[0];
+                const leastEfficient = efficiencies[efficiencies.length - 1];
+
+                // Historical analysis
+                const allTotals = data.map(d => parseInt(d.total_requests) || 0);
+                const peakTotal = Math.max(...allTotals);
+                const minTotal = Math.min(...allTotals);
+
+                // Net change rate calculation (requests per time period)
+                let netChangeRate = 0;
+                let changeText = 'No data';
+                if (data.length >= 2) {
+                    const oldestTotal = parseInt(data[0].total_requests) || 0;
+                    const latestTotal = parseInt(latest.total_requests) || 0;
+                    const totalChange = latestTotal - oldestTotal;
+
+                    // Calculate time span in years
+                    const oldestDate = new Date(data[0].timestamp);
+                    const latestDate = new Date(latest.timestamp);
+                    const yearsSpan = (latestDate - oldestDate) / (1000 * 60 * 60 * 24 * 365.25);
+
+                    if (yearsSpan > 0) {
+                        netChangeRate = totalChange / yearsSpan;
+                        const sign = netChangeRate >= 0 ? '+' : '';
+                        changeText = `${sign}${Math.round(netChangeRate)} req/year`;
+                    }
+                }
+
+                // Clearing efficiency ratio (how well clearing keeps up with demand)
+                const totalClearedPerYear = totalCleared * 4; // quarters to years
+                let efficiencyRatio = 'No trend data';
+                if (netChangeRate !== 0 && totalClearedPerYear > 0) {
+                    if (netChangeRate > 0) {
+                        // Growing waitlist
+                        const ratio = totalClearedPerYear / Math.abs(netChangeRate);
+                        efficiencyRatio = `${(ratio * 100).toFixed(0)}% of growth`;
+                    } else {
+                        // Shrinking waitlist
+                        efficiencyRatio = 'Clearing faster than growth';
+                    }
+                } else if (netChangeRate <= 0) {
+                    efficiencyRatio = 'Waitlist stable/shrinking';
+                }
+
+                // Previous data for trends
+                const prevTotal = previous ? parseInt(previous.total_requests) || 0 : null;
+
+                // Market share calculations
+                const share22 = formatPercentage(req22, totalRequests);
+                const share23 = formatPercentage(req23, totalRequests);
+                const share24 = formatPercentage(req24, totalRequests);
+
+                // Find largest demand category
+                const demands = [
+                    { type: '/22', count: req22, share: share22 },
+                    { type: '/23', count: req23, share: share23 },
+                    { type: '/24', count: req24, share: share24 }
+                ].sort((a, b) => b.count - a.count);
+
+                const largestDemand = demands[0];
+
                 // Update current waitlist
                 document.getElementById('current-22').textContent = formatNumber(req22);
                 document.getElementById('current-23').textContent = formatNumber(req23);
@@ -504,6 +654,33 @@
                 // Update network analysis
                 document.getElementById('total-24-equiv').textContent = formatNumber(total24Equiv);
                 document.getElementById('total-ips').textContent = formatNumber(totalIPs);
+
+                // Update efficiency analysis
+                if (mostEfficient) {
+                    document.getElementById('most-efficient').textContent =
+                        `${mostEfficient.type} (${Math.round(mostEfficient.efficiency)} IPs/yr)`;
+                }
+                if (leastEfficient) {
+                    document.getElementById('least-efficient').textContent =
+                        `${leastEfficient.type} (${Math.round(leastEfficient.efficiency)} IPs/yr)`;
+                }
+
+                // Update historical context with trends
+                const totalTrendHtml = formatNumber(totalReq) + getTrendIndicator(totalReq, prevTotal, true);
+                document.getElementById('total-trend').innerHTML = totalTrendHtml;
+
+                document.getElementById('peak-total').textContent =
+                    `${formatNumber(peakTotal)} (${peakTotal === totalReq ? 'current' : 'all-time'})`;
+
+                document.getElementById('net-change').textContent = changeText;
+                document.getElementById('clearing-efficiency').textContent = efficiencyRatio;
+
+                // Update market share statistics
+                document.getElementById('market-22-requests').textContent = share22;
+                document.getElementById('market-23-requests').textContent = share23;
+                document.getElementById('market-24-requests').textContent = share24;
+                document.getElementById('largest-demand').textContent =
+                    `${largestDemand.type} (${largestDemand.share})`;
 
                 // Show the statistics section
                 document.getElementById('statistics').style.display = 'block';
