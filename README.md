@@ -2,6 +2,13 @@
 
 Analyzes ARIN's IPv4 waiting list and estimates wait times based on historical clearing data.
 
+**[View Live Dashboard](https://lanrat.github.io/ARIN-IPv4-Waitlist-Tracking/)**
+
+## Data Sources
+
+- [ARIN IPv4 Waiting List](https://www.arin.net/resources/guide/ipv4/waiting_list/) - Current waitlist status
+- [IPv4 Addresses Cleared for Waiting List](https://www.arin.net/resources/guide/ipv4/blocks_cleared/) - Historical clearing data
+
 ## Features
 
 - Fetches current waitlist data from ARIN's public API
@@ -13,17 +20,20 @@ Analyzes ARIN's IPv4 waiting list and estimates wait times based on historical c
 ## Usage
 
 ### Basic Analysis
+
 ```bash
 python process.py                    # Text output
 python process.py --csv              # CSV output
 ```
 
 ### Historical Data
+
 ```bash
 python process.py --file snapshot.json --csv  # Analyze historical snapshot
 ```
 
 ### Extract HTML Data
+
 ```bash
 python extract_html_data.py "file.html"       # Convert HTML table to JSON
 ```
@@ -37,6 +47,7 @@ python extract_html_data.py "file.html"       # Convert HTML table to JSON
 ## Dashboard
 
 Open `docs/index.html` in a web browser to view interactive charts showing:
+
 - Current waitlist size over time
 - Historical blocks cleared per quarter
 - Estimated wait times
