@@ -34,26 +34,6 @@
             height: 400px;
             margin: 20px 0;
         }
-        .download-section {
-            text-align: center;
-            margin: 30px 0;
-            background-color: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .download-link {
-            display: inline-block;
-            background-color: #007bff;
-            color: white;
-            padding: 10px 20px;
-            text-decoration: none;
-            border-radius: 5px;
-            margin: 10px;
-        }
-        .download-link:hover {
-            background-color: #0056b3;
-        }
         .loading {
             text-align: center;
             padding: 50px;
@@ -67,6 +47,21 @@
             border-radius: 8px;
             margin: 20px 0;
         }
+        .footer {
+            text-align: center;
+            margin: 40px 0 20px 0;
+            padding: 20px;
+            border-top: 1px solid #dee2e6;
+            color: #6c757d;
+            font-size: 14px;
+        }
+        .footer a {
+            color: #007bff;
+            text-decoration: none;
+        }
+        .footer a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -75,10 +70,6 @@
         <p>Real-time analysis of IPv4 address block waitlist and estimated wait times</p>
     </div>
 
-    <div class="download-section">
-        <h3>Data Download</h3>
-        <a href="waitlist_data.csv" download class="download-link">Download CSV Data</a>
-    </div>
 
     <div id="loading" class="loading">
         <h3>Loading data...</h3>
@@ -275,5 +266,13 @@
         // Load data when page loads
         document.addEventListener('DOMContentLoaded', loadData);
     </script>
+
+    <footer class="footer">
+        <p>
+            <a href="https://github.com/lanrat/ARIN-IPv4-Waitlist-Tracking" target="_blank">
+                🔗 View project on GitHub
+            </a>
+        </p>
+    </footer>
 </body>
 </html>
