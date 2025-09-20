@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARIN IPv4 Waitlist Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .chart-container {
+            background-color: white;
+            margin: 20px 0;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .chart-wrapper {
+            position: relative;
+            height: 400px;
+            margin: 20px 0;
+        }
+        .download-section {
+            text-align: center;
+            margin: 30px 0;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .download-link {
+            display: inline-block;
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 10px;
+        }
+        .download-link:hover {
+            background-color: #0056b3;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+        }
+        .error {
+            text-align: center;
+            padding: 50px;
+            color: #d32f2f;
+            background-color: #ffebee;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>ARIN IPv4 Waitlist Dashboard</h1>
+        <p>Real-time analysis of IPv4 address block waitlist and estimated wait times</p>
+    </div>
+
+    <div class="download-section">
+        <h3>Data Download</h3>
+        <a href="waitlist_data.csv" download class="download-link">Download CSV Data</a>
+    </div>
+
+    <div id="loading" class="loading">
+        <h3>Loading data...</h3>
+    </div>
+
+    <div id="error" class="error" style="display: none;">
+        <h3>Error loading data</h3>
+        <p>Could not load waitlist_data.csv. Please ensure the file exists in the same directory.</p>
+    </div>
+
+    <div id="charts" style="display: none;">
+        <div class="chart-container">
+            <h2>Current Waitlist Size</h2>
+            <div class="chart-wrapper">
+                <canvas id="waitlistChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Historical Blocks Cleared Per Quarter</h2>
+            <div class="chart-wrapper">
+                <canvas id="historicalChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Estimated Wait Time (Years)</h2>
+            <div class="chart-wrapper">
+                <canvas id="waitTimeChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration for chart colors
+        const colors = {
+            '/22': '#ff6384',
+            '/23': '#36a2eb',
+            '/24': '#4bc0c0'
+        };
+
+        // Function to parse CSV data
+        function parseCSV(csvText) {
+            const lines = csvText.trim().split('\n').filter(line => line.trim() !== '');
+            const headers = lines[0].split(',').map(h => h.trim());
+            const data = [];
+
+            for (let i = 1; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line === '') continue;
+
+                const values = line.split(',').map(v => v.trim());
+                if (values.length !== headers.length) continue; // Skip malformed rows
+
+                const row = {};
+                headers.forEach((header, index) => {
+                    row[header] = values[index];
+                });
+                data.push(row);
+            }
+
+            console.log('Parsed data:', data); // Debug output
+            return data;
+        }
+
+        // Function to create chart datasets
+        function createDatasets(data, valueColumns, label) {
+            const datasets = [];
+
+            Object.keys(colors).forEach(size => {
+                const column = valueColumns[size];
+                if (column) {
+                    const chartData = data.map(row => {
+                        const value = parseFloat(row[column]);
+                        console.log(`${column} for ${size}: "${row[column]}" -> ${value}`); // Debug output
+                        return {
+                            x: new Date(row.timestamp),
+                            y: isNaN(value) ? 0 : value
+                        };
+                    });
+
+                    datasets.push({
+                        label: `${label} ${size}`,
+                        data: chartData,
+                        borderColor: colors[size],
+                        backgroundColor: colors[size] + '20',
+                        tension: 0.1
+                    });
+                }
+            });
+
+            return datasets;
+        }
+
+        // Function to create a chart
+        function createChart(canvasId, title, data, valueColumns, yAxisLabel) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            const datasets = createDatasets(data, valueColumns, '');
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: title
+                        },
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day',
+                                displayFormats: {
+                                    day: 'MMM dd'
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: yAxisLabel
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Load and process data
+        async function loadData() {
+            try {
+                const response = await fetch('waitlist_data.csv');
+                if (!response.ok) {
+                    throw new Error('Failed to load CSV file');
+                }
+
+                const csvText = await response.text();
+                const data = parseCSV(csvText);
+
+                if (data.length === 0) {
+                    throw new Error('No data found in CSV file');
+                }
+
+                // Hide loading, show charts
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('charts').style.display = 'block';
+
+                // Create charts
+                createChart('waitlistChart', 'Current Waitlist Size Over Time', data, {
+                    '/22': 'requests_22',
+                    '/23': 'requests_23',
+                    '/24': 'requests_24'
+                }, 'Number of Requests');
+
+                createChart('historicalChart', 'Historical Blocks Cleared Per Quarter', data, {
+                    '/22': 'avg_22_cleared_per_quarter',
+                    '/23': 'avg_23_cleared_per_quarter',
+                    '/24': 'avg_24_cleared_per_quarter'
+                }, 'Blocks Per Quarter');
+
+                createChart('waitTimeChart', 'Estimated Wait Time', data, {
+                    '/22': 'estimated_years_22',
+                    '/23': 'estimated_years_23',
+                    '/24': 'estimated_years_24'
+                }, 'Years');
+
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+            }
+        }
+
+        // Load data when page loads
+        document.addEventListener('DOMContentLoaded', loadData);
+    </script>
+</body>
+</html>
