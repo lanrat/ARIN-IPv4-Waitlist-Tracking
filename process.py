@@ -20,7 +20,42 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Analyze ARIN IPv4 waitlist and estimate wait times')
     parser.add_argument('--csv', action='store_true', help='Output data in CSV format')
     parser.add_argument('--no-header', action='store_true', help='Skip CSV header (useful for appending to existing files)')
+    parser.add_argument('--file', type=str, help='Use local waitlist file (JSON format) instead of fetching from URL')
     return parser.parse_args()
+
+def parse_waitlist_json(json_content):
+    """Parse JSON waitlist data and return (data_list, last_timestamp)"""
+    data_list = json.loads(json_content)
+
+    # Normalize field names to match current API format
+    normalized_data = []
+    timestamps = []
+
+    for item in data_list:
+        # Handle both old format (lowercase) and new format (camelCase)
+        timestamp = item.get('waitListActionDate') or item.get('waitlistactiondate')
+        min_cidr = item.get('minimumCidr') or item.get('minimumcidr')
+        max_cidr = item.get('maximumCidr') or item.get('maximumcidr')
+
+        if timestamp and max_cidr:
+            timestamps.append(timestamp)
+            normalized_data.append({
+                'waitListActionDate': timestamp,
+                'minimumCidr': int(min_cidr) if min_cidr else None,
+                'maximumCidr': int(max_cidr)
+            })
+
+    # Find the most recent timestamp
+    last_timestamp = max(timestamps) if timestamps else None
+
+    return normalized_data, last_timestamp
+
+def load_waitlist_data(file_path):
+    """Load waitlist data from local JSON file"""
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    return parse_waitlist_json(content)
 
 def output_csv(total_requests, requests_22, requests_23, requests_24,
                avg_22_cleared, avg_23_cleared, avg_24_cleared,
@@ -47,9 +82,12 @@ def output_csv(total_requests, requests_22, requests_23, requests_24,
             'estimated_years_24'
         ])
 
+    # Use file timestamp if available, otherwise current time
+    timestamp = data_timestamp if 'data_timestamp' in globals() and data_timestamp else datetime.now().isoformat()
+
     # Data row
     writer.writerow([
-        datetime.now().isoformat(),
+        timestamp,
         total_requests,
         requests_22,
         requests_23,
@@ -126,35 +164,36 @@ try:
     # Convert 'Date Reissued' to datetime objects for time-series analysis
     historical_df['Date Reissued'] = pd.to_datetime(historical_df['Date Reissued'], format='%m/%d/%y')
 
-    # Group data by quarter and prefix size, then count the occurrences
-    quarterly_counts = historical_df.groupby([pd.Grouper(key='Date Reissued', freq='QE'), 'Prefix Size']).size().unstack(fill_value=0)
-
-    # Calculate the average number of blocks cleared per quarter for each size
-    avg_cleared_per_quarter = quarterly_counts.mean()
-    avg_22_cleared = avg_cleared_per_quarter.get(22, 0)
-    avg_23_cleared = avg_cleared_per_quarter.get(23, 0)
-    avg_24_cleared = avg_cleared_per_quarter.get(24, 0)
+    # Store historical_df for later processing after we get the timestamp
 
 except requests.exceptions.RequestException as e:
-    print(f"Error fetching historical data CSV: {e}")
-    exit()
+    print(f"Error fetching historical data CSV: {e}", file=sys.stderr)
+    sys.exit(1)
 except Exception as e:
-    print(f"An error occurred while processing historical data: {e}")
-    exit()
+    print(f"An error occurred while processing historical data: {e}", file=sys.stderr)
+    sys.exit(1)
 
 # --- Step 2: Analyze the Current Waitlist ---
 
 try:
-    # Fetch the waitlist JSON from the URL
-    response = requests.get(CURRENT_WAITLIST_URL)
-    response.raise_for_status() # Raise an exception for bad status codes
+    if args.file:
+        # Load from local file
+        waitlist_data, data_timestamp = load_waitlist_data(args.file)
 
-    # Save the waitlist JSON data to a local file
-    with open('data/waitlist_data.json', 'w', encoding='utf-8') as f:
-        f.write(response.text)
+        # Save the waitlist data to a local file (convert to JSON format if needed)
+        with open('data/waitlist_data.json', 'w', encoding='utf-8') as f:
+            json.dump(waitlist_data, f, indent=2)
+    else:
+        # Fetch the waitlist JSON from the URL
+        response = requests.get(CURRENT_WAITLIST_URL)
+        response.raise_for_status() # Raise an exception for bad status codes
 
-    # Parse the JSON content from the response text
-    waitlist_data = json.loads(response.text)
+        # Save the waitlist JSON data to a local file
+        with open('data/waitlist_data.json', 'w', encoding='utf-8') as f:
+            f.write(response.text)
+
+        # Parse the JSON content from the response text
+        waitlist_data, data_timestamp = parse_waitlist_json(response.text)
 
     # Count the number of requests for each prefix size based on 'maximumCidr'
     requests_list = [str(item['maximumCidr']) for item in waitlist_data if 'maximumCidr' in item]
@@ -166,16 +205,39 @@ try:
     total_requests = len(waitlist_data)
 
 except requests.exceptions.RequestException as e:
-    print(f"Error fetching waitlist JSON: {e}")
-    exit()
+    print(f"Error fetching waitlist JSON: {e}", file=sys.stderr)
+    sys.exit(1)
 except json.JSONDecodeError as e:
-    print(f"Error parsing waitlist JSON: {e}")
-    exit()
+    print(f"Error parsing waitlist JSON: {e}", file=sys.stderr)
+    sys.exit(1)
+except FileNotFoundError as e:
+    print(f"Error: File not found: {e}", file=sys.stderr)
+    sys.exit(1)
 except Exception as e:
-    print(f"An error occurred while processing the waitlist: {e}")
-    exit()
+    print(f"An error occurred while processing the waitlist: {e}", file=sys.stderr)
+    sys.exit(1)
 
-# --- Step 3: Calculate and Display the Estimated Wait Times ---
+# --- Step 3: Process Historical Data with Timestamp Cutoff ---
+
+# Apply timestamp cutoff if using a local file (for historical analysis)
+if args.file and data_timestamp:
+    # Convert the waitlist timestamp to datetime for comparison (remove timezone info to match historical data)
+    cutoff_date = pd.to_datetime(data_timestamp).tz_localize(None)
+    print(f"Using timestamp cutoff: {cutoff_date}", file=sys.stderr)
+
+    # Filter historical data to only include entries before the waitlist snapshot
+    historical_df = historical_df[historical_df['Date Reissued'] <= cutoff_date]
+
+# Group data by quarter and prefix size, then count the occurrences
+quarterly_counts = historical_df.groupby([pd.Grouper(key='Date Reissued', freq='QE'), 'Prefix Size']).size().unstack(fill_value=0)
+
+# Calculate the average number of blocks cleared per quarter for each size
+avg_cleared_per_quarter = quarterly_counts.mean()
+avg_22_cleared = avg_cleared_per_quarter.get(22, 0)
+avg_23_cleared = avg_cleared_per_quarter.get(23, 0)
+avg_24_cleared = avg_cleared_per_quarter.get(24, 0)
+
+# --- Step 4: Calculate and Display the Estimated Wait Times ---
 
 # Calculate the estimated number of quarters to clear the queue
 # Use math.ceil to round up, as a partial quarter is still a full waiting period.
