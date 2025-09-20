@@ -1,0 +1,54 @@
+name: Update IPv4 Waitlist Data
+
+on:
+  # Run monthly on the 1st day of each month at 02:00 UTC
+  schedule:
+    - cron: '0 2 1 * *'
+
+  # Allow manual triggering
+  workflow_dispatch:
+
+jobs:
+  update-waitlist-data:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write  # Required to commit changes back to the repo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip' # caching pip dependencies
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run waitlist data collection
+        run: |
+          python process.py --csv --no-header >> docs/waitlist_data.csv
+
+      - name: Check for changes
+        id: git-check
+        run: |
+          git diff --exit-code docs/waitlist_data.csv data/ || echo "changes=true" >> $GITHUB_OUTPUT
+
+      - name: Commit and push changes
+        if: steps.git-check.outputs.changes == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add docs/waitlist_data.csv data/
+          git commit -m "Update IPv4 waitlist data - $(date '+%Y-%m-%d %H:%M:%S UTC')"
+          git push
+
+      - name: No changes detected
+        if: steps.git-check.outputs.changes != 'true'
+        run: |
+          echo "No changes detected in waitlist data"
