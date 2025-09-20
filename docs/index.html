@@ -339,6 +339,13 @@
                 <canvas id="waitTimeChart"></canvas>
             </div>
         </div>
+
+        <div class="chart-container">
+            <h2>Total Processing Capacity Over Time</h2>
+            <div class="chart-wrapper">
+                <canvas id="processedChart"></canvas>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -485,6 +492,128 @@
             });
             } catch (error) {
                 console.error(`Error creating chart ${canvasId}:`, error);
+                throw error;
+            }
+        }
+
+        // Function to create processing capacity chart
+        function createProcessingChart(canvasId, title, data) {
+            try {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                const themeColors = getThemeColors();
+
+                // Calculate total processing capacity and individual components
+                const datasets = [];
+
+                // Individual block type datasets
+                Object.keys(colors).forEach(size => {
+                    const column = {
+                        '/22': 'avg_22_cleared_per_quarter',
+                        '/23': 'avg_23_cleared_per_quarter',
+                        '/24': 'avg_24_cleared_per_quarter'
+                    }[size];
+
+                    if (column) {
+                        const chartData = data.map(row => {
+                            const value = parseFloat(row[column]) || 0;
+                            return {
+                                x: new Date(row.timestamp),
+                                y: value
+                            };
+                        });
+
+                        datasets.push({
+                            label: `${size} Blocks`,
+                            data: chartData,
+                            borderColor: colors[size],
+                            backgroundColor: colors[size] + '20',
+                            tension: 0.1
+                        });
+                    }
+                });
+
+                // Total processing capacity dataset
+                const totalData = data.map(row => {
+                    const cleared22 = parseFloat(row.avg_22_cleared_per_quarter) || 0;
+                    const cleared23 = parseFloat(row.avg_23_cleared_per_quarter) || 0;
+                    const cleared24 = parseFloat(row.avg_24_cleared_per_quarter) || 0;
+                    const total = cleared22 + cleared23 + cleared24;
+
+                    return {
+                        x: new Date(row.timestamp),
+                        y: total
+                    };
+                });
+
+                datasets.push({
+                    label: 'Total Capacity',
+                    data: totalData,
+                    borderColor: '#ffa500',
+                    backgroundColor: '#ffa500' + '20',
+                    borderWidth: 3,
+                    tension: 0.1
+                });
+
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: { datasets },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: title,
+                                color: themeColors.text
+                            },
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: {
+                                    color: themeColors.text
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    unit: 'day',
+                                    displayFormats: {
+                                        day: 'MMM dd, yyyy'
+                                    }
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Time',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            },
+                            y: {
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: 'Entries Processed Per Quarter',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error(`Error creating processing chart ${canvasId}:`, error);
                 throw error;
             }
         }
@@ -764,6 +893,9 @@
                     '/23': 'estimated_years_23',
                     '/24': 'estimated_years_24'
                 }, 'Years');
+
+                // Create processing capacity chart with calculated total
+                createProcessingChart('processedChart', 'Total Processing Capacity Over Time', data);
 
             } catch (error) {
                 console.error('Error loading data:', error);
