@@ -104,6 +104,61 @@
         .last-updated-time {
             font-weight: normal;
         }
+        .statistics-section {
+            margin: 30px 0;
+        }
+        .statistics-section h2 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background-color: var(--card-bg);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .stat-card h3 {
+            margin: 0 0 15px 0;
+            color: var(--text-color);
+            font-size: 18px;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 10px 0;
+            padding: 8px 0;
+        }
+        .stat-item:not(:last-child) {
+            border-bottom: 1px solid var(--border-color);
+        }
+        .stat-label {
+            color: var(--text-muted);
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .stat-value {
+            color: var(--text-color);
+            font-weight: 600;
+            font-size: 15px;
+        }
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            .stat-card {
+                padding: 15px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -116,6 +171,90 @@
         </p>
     </div>
 
+    <div id="statistics" class="statistics-section" style="display: none;">
+        <h2>Current Statistics</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Current Waitlist</h3>
+                <div class="stat-item">
+                    <span class="stat-label">/22 requests:</span>
+                    <span class="stat-value" id="current-22">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">/23 requests:</span>
+                    <span class="stat-value" id="current-23">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">/24 requests:</span>
+                    <span class="stat-value" id="current-24">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Total requests:</span>
+                    <span class="stat-value" id="total-requests">-</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>Estimated Wait Times</h3>
+                <div class="stat-item">
+                    <span class="stat-label">/22 networks:</span>
+                    <span class="stat-value" id="wait-22">- years</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">/23 networks:</span>
+                    <span class="stat-value" id="wait-23">- years</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">/24 networks:</span>
+                    <span class="stat-value" id="wait-24">- years</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Average wait:</span>
+                    <span class="stat-value" id="avg-wait">- years</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>Clearing Rates</h3>
+                <div class="stat-item">
+                    <span class="stat-label">/22 per quarter:</span>
+                    <span class="stat-value" id="cleared-22">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">/23 per quarter:</span>
+                    <span class="stat-value" id="cleared-23">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">/24 per quarter:</span>
+                    <span class="stat-value" id="cleared-24">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Total per quarter:</span>
+                    <span class="stat-value" id="total-cleared">-</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h3>Network Analysis</h3>
+                <div class="stat-item">
+                    <span class="stat-label">Total /24 equivalent:</span>
+                    <span class="stat-value" id="total-24-equiv">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">IPv4 addresses waiting:</span>
+                    <span class="stat-value" id="total-ips">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Largest block size:</span>
+                    <span class="stat-value" id="largest-block">/22 (1024 IPs)</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Smallest block size:</span>
+                    <span class="stat-value" id="smallest-block">/24 (256 IPs)</span>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <div id="loading" class="loading">
         <h3>Loading data...</h3>
@@ -297,6 +436,85 @@
             }
         }
 
+        // Function to format numbers with commas
+        function formatNumber(num) {
+            if (num === null || num === undefined || isNaN(num)) return '-';
+            return parseFloat(num).toLocaleString();
+        }
+
+        // Function to format years with 1 decimal place
+        function formatYears(years) {
+            if (years === null || years === undefined || isNaN(years)) return '-';
+            if (years === Infinity) return '∞';
+            return parseFloat(years).toFixed(1);
+        }
+
+        // Function to calculate and display statistics
+        function updateStatistics(data) {
+            if (data.length === 0) return;
+
+            try {
+                // Get the most recent data point
+                const latest = data[data.length - 1];
+
+                // Current waitlist counts
+                const req22 = parseInt(latest.requests_22) || 0;
+                const req23 = parseInt(latest.requests_23) || 0;
+                const req24 = parseInt(latest.requests_24) || 0;
+                const totalReq = parseInt(latest.total_requests) || 0;
+
+                // Wait times
+                const wait22 = parseFloat(latest.estimated_years_22) || 0;
+                const wait23 = parseFloat(latest.estimated_years_23) || 0;
+                const wait24 = parseFloat(latest.estimated_years_24) || 0;
+
+                // Clearing rates
+                const cleared22 = parseFloat(latest.avg_22_cleared_per_quarter) || 0;
+                const cleared23 = parseFloat(latest.avg_23_cleared_per_quarter) || 0;
+                const cleared24 = parseFloat(latest.avg_24_cleared_per_quarter) || 0;
+
+                // Calculated statistics
+                const total24Equiv = (req22 * 4) + (req23 * 2) + req24;
+                const totalIPs = (req22 * 1024) + (req23 * 512) + (req24 * 256);
+                const totalCleared = cleared22 + cleared23 + cleared24;
+
+                // Weighted average wait time
+                const totalRequests = req22 + req23 + req24;
+                const avgWait = totalRequests > 0 ?
+                    ((wait22 * req22) + (wait23 * req23) + (wait24 * req24)) / totalRequests : 0;
+
+                // Update current waitlist
+                document.getElementById('current-22').textContent = formatNumber(req22);
+                document.getElementById('current-23').textContent = formatNumber(req23);
+                document.getElementById('current-24').textContent = formatNumber(req24);
+                document.getElementById('total-requests').textContent = formatNumber(totalReq);
+
+                // Update wait times
+                document.getElementById('wait-22').textContent = formatYears(wait22) + ' years';
+                document.getElementById('wait-23').textContent = formatYears(wait23) + ' years';
+                document.getElementById('wait-24').textContent = formatYears(wait24) + ' years';
+                document.getElementById('avg-wait').textContent = formatYears(avgWait) + ' years';
+
+                // Update clearing rates
+                document.getElementById('cleared-22').textContent = formatNumber(cleared22);
+                document.getElementById('cleared-23').textContent = formatNumber(cleared23);
+                document.getElementById('cleared-24').textContent = formatNumber(cleared24);
+                document.getElementById('total-cleared').textContent = formatNumber(totalCleared);
+
+                // Update network analysis
+                document.getElementById('total-24-equiv').textContent = formatNumber(total24Equiv);
+                document.getElementById('total-ips').textContent = formatNumber(totalIPs);
+
+                // Show the statistics section
+                document.getElementById('statistics').style.display = 'block';
+
+            } catch (error) {
+                console.error('Error updating statistics:', error);
+                // Hide statistics section if there's an error
+                document.getElementById('statistics').style.display = 'none';
+            }
+        }
+
         // Function to update last updated timestamp
         function updateLastUpdated(data) {
             if (data.length === 0) return;
@@ -347,6 +565,9 @@
 
                 // Update last updated timestamp
                 updateLastUpdated(data);
+
+                // Update statistics
+                updateStatistics(data);
 
                 // Create charts
                 createChart('waitlistChart', 'Current Waitlist Size Over Time', data, {
