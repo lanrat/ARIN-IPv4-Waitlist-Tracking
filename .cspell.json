@@ -1,0 +1,15 @@
+{
+    "version": "0.2",
+    "ignorePaths": [
+        "requirements.txt"
+    ],
+    "dictionaryDefinitions": [],
+    "dictionaries": [],
+    "words": [
+        "ARIN",
+        "maximumcidr",
+        "waitlist"
+    ],
+    "ignoreWords": [],
+    "import": []
+}
