@@ -840,14 +840,11 @@
                 const mostRecentEntry = data[data.length - 1];
                 const timestamp = new Date(mostRecentEntry.timestamp);
 
-                // Format in human-readable format using toLocaleString instead
-                const formattedTime = timestamp.toLocaleString('en-US', {
+                // Format in human-readable format using toLocaleDateString for date only
+                const formattedTime = timestamp.toLocaleDateString('en-US', {
                     year: 'numeric',
                     month: 'long',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    timeZoneName: 'short'
+                    day: 'numeric'
                 });
 
                 // Update the DOM
