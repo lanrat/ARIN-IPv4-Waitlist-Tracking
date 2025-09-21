@@ -1,9 +1,9 @@
 name: Update IPv4 Waitlist Data
 
 on:
-  # Run monthly on the 1st day of each month at 02:00 UTC
   schedule:
-    - cron: '0 2 1 * *'
+    - cron: '0 2 * * 3'  # Run weekly on Wednesdays at 02:00 UTC
+
 
   # Allow manual triggering
   workflow_dispatch:
