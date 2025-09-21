@@ -188,9 +188,9 @@ try:
         response = requests.get(CURRENT_WAITLIST_URL)
         response.raise_for_status() # Raise an exception for bad status codes
 
-        # Save the waitlist JSON data to a local file
+        # Save the waitlist JSON data to a local file with formatting
         with open('data/waitlist_data.json', 'w', encoding='utf-8') as f:
-            f.write(response.text)
+            json.dump(json.loads(response.text), f, indent=2)
 
         # Parse the JSON content from the response text
         waitlist_data, data_timestamp = parse_waitlist_json(response.text)
