@@ -1210,11 +1210,6 @@
     "maximumCidr": 24
   },
   {
-    "waitListActionDate": "2025-06-16T19:50:49.047+00:00",
-    "minimumCidr": 22,
-    "maximumCidr": 22
-  },
-  {
     "waitListActionDate": "2025-06-17T22:17:42.392+00:00",
     "minimumCidr": 24,
     "maximumCidr": 24
@@ -2138,5 +2133,105 @@
     "waitListActionDate": "2025-10-14T20:45:02.430+00:00",
     "minimumCidr": 23,
     "maximumCidr": 23
+  },
+  {
+    "waitListActionDate": "2025-10-15T14:24:37.640+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-10-15T15:20:06.699+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-15T18:10:18.172+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-15T20:47:27.399+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-15T21:24:02.259+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-10-16T12:07:58.459+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-16T13:10:23.664+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-16T16:50:13.556+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-16T17:42:45.833+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-16T21:48:13.870+00:00",
+    "minimumCidr": 23,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-16T22:21:42.058+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-16T22:35:22.957+00:00",
+    "minimumCidr": 23,
+    "maximumCidr": 23
+  },
+  {
+    "waitListActionDate": "2025-10-17T17:32:14.523+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-10-17T20:25:22.227+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-10-20T14:41:22.204+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-10-20T15:16:57.220+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-20T20:57:50.736+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-21T11:43:13.148+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-21T13:00:54.436+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-10-21T18:25:22.452+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
   }
 ]
