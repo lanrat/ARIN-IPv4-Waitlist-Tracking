@@ -32,12 +32,6 @@ python process.py --csv              # CSV output
 python process.py --file snapshot.json --csv  # Analyze historical snapshot
 ```
 
-### Extract HTML Data
-
-```bash
-python extract_html_data.py "file.html"       # Convert HTML table to JSON
-```
-
 ## Output Files
 
 - `docs/waitlist_data.csv` - Time-series data for dashboard
