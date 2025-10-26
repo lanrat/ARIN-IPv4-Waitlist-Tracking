@@ -316,6 +316,26 @@
                     <span class="stat-value" id="clearing-efficiency">-</span>
                 </div>
             </div>
+
+            <div class="stat-card">
+                <h3>Recent Activity</h3>
+                <div class="stat-item">
+                    <span class="stat-label">Added (latest):</span>
+                    <span class="stat-value trend-up" id="recent-added">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Removed (latest):</span>
+                    <span class="stat-value trend-down" id="recent-removed">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Net change (latest):</span>
+                    <span class="stat-value" id="recent-net-change">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Turnover rate:</span>
+                    <span class="stat-value" id="turnover-rate">-</span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -354,6 +374,20 @@
             <h2>Total Processing Capacity Over Time</h2>
             <div class="chart-wrapper">
                 <canvas id="processedChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Request Activity (Added vs Removed)</h2>
+            <div class="chart-wrapper">
+                <canvas id="activityChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Net Change Over Time</h2>
+            <div class="chart-wrapper">
+                <canvas id="netChangeChart"></canvas>
             </div>
         </div>
     </div>
@@ -821,6 +855,25 @@
                 document.getElementById('largest-demand').textContent =
                     `${largestDemand.type} (${largestDemand.share})`;
 
+                // Update recent activity statistics
+                const recentAdded = parseInt(latest.added_total) || 0;
+                const recentRemoved = parseInt(latest.removed_total) || 0;
+                const recentNetChange = parseInt(latest.net_change) || 0;
+
+                document.getElementById('recent-added').textContent = `+${formatNumber(recentAdded)}`;
+                document.getElementById('recent-removed').textContent = formatNumber(recentRemoved);
+
+                // Net change with sign and color
+                const netChangeSign = recentNetChange >= 0 ? '+' : '';
+                const netChangeClass = recentNetChange > 0 ? 'trend-up' : (recentNetChange < 0 ? 'trend-down' : 'trend-stable');
+                const netChangeEl = document.getElementById('recent-net-change');
+                netChangeEl.textContent = `${netChangeSign}${formatNumber(recentNetChange)}`;
+                netChangeEl.className = `stat-value ${netChangeClass}`;
+
+                // Turnover rate (% of waitlist that changed)
+                const turnoverRate = totalReq > 0 ? ((recentAdded + recentRemoved) / totalReq) * 100 : 0;
+                document.getElementById('turnover-rate').textContent = `${turnoverRate.toFixed(1)}%`;
+
                 // Show the statistics section
                 document.getElementById('statistics').style.display = 'block';
 
@@ -828,6 +881,209 @@
                 console.error('Error updating statistics:', error);
                 // Hide statistics section if there's an error
                 document.getElementById('statistics').style.display = 'none';
+            }
+        }
+
+        // Function to create activity chart (added vs removed)
+        function createActivityChart(canvasId, title, data) {
+            try {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                const themeColors = getThemeColors();
+
+                // Filter out first data point (has no previous to compare against)
+                const filteredData = data.slice(1);
+
+                // Create datasets for added and removed requests
+                const addedData = filteredData.map(row => ({
+                    x: new Date(row.timestamp),
+                    y: parseInt(row.added_total) || 0
+                }));
+
+                const removedData = filteredData.map(row => ({
+                    x: new Date(row.timestamp),
+                    y: parseInt(row.removed_total) || 0
+                }));
+
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Requests Added',
+                                data: addedData,
+                                borderColor: '#4ecdc4',
+                                backgroundColor: '#4ecdc4' + '20',
+                                tension: 0.1,
+                                fill: true
+                            },
+                            {
+                                label: 'Requests Removed',
+                                data: removedData,
+                                borderColor: '#ff6b6b',
+                                backgroundColor: '#ff6b6b' + '20',
+                                tension: 0.1,
+                                fill: true
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: title,
+                                color: themeColors.text
+                            },
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: {
+                                    color: themeColors.text
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    unit: 'day',
+                                    displayFormats: {
+                                        day: 'MMM dd, yyyy'
+                                    }
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Time',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            },
+                            y: {
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: 'Number of Requests',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error(`Error creating activity chart ${canvasId}:`, error);
+                throw error;
+            }
+        }
+
+        // Function to create net change chart
+        function createNetChangeChart(canvasId, title, data) {
+            try {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                const themeColors = getThemeColors();
+
+                // Filter out first data point
+                const filteredData = data.slice(1);
+
+                // Create dataset for net change
+                const netChangeData = filteredData.map(row => {
+                    const netChange = parseInt(row.net_change) || 0;
+                    return {
+                        x: new Date(row.timestamp),
+                        y: netChange
+                    };
+                });
+
+                return new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Net Change',
+                                data: netChangeData,
+                                backgroundColor: netChangeData.map(point =>
+                                    point.y > 0 ? 'rgba(255, 107, 107, 0.6)' :  // Red for growth
+                                    point.y < 0 ? 'rgba(78, 205, 196, 0.6)' :   // Teal for shrinkage
+                                    'rgba(160, 160, 160, 0.6)'                    // Gray for no change
+                                ),
+                                borderColor: netChangeData.map(point =>
+                                    point.y > 0 ? '#ff6b6b' :
+                                    point.y < 0 ? '#4ecdc4' :
+                                    '#a0a0a0'
+                                ),
+                                borderWidth: 1
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: title,
+                                color: themeColors.text
+                            },
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: {
+                                    color: themeColors.text
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    unit: 'day',
+                                    displayFormats: {
+                                        day: 'MMM dd, yyyy'
+                                    }
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Time',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            },
+                            y: {
+                                title: {
+                                    display: true,
+                                    text: 'Net Change (Added - Removed)',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid,
+                                    drawBorder: true
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error(`Error creating net change chart ${canvasId}:`, error);
+                throw error;
             }
         }
 
@@ -903,6 +1159,12 @@
 
                 // Create processing capacity chart with calculated total
                 createProcessingChart('processedChart', 'Total Processing Capacity Over Time', data);
+
+                // Create activity chart (added vs removed)
+                createActivityChart('activityChart', 'Request Activity Over Time', data);
+
+                // Create net change chart
+                createNetChangeChart('netChangeChart', 'Net Change Over Time', data);
 
             } catch (error) {
                 console.error('Error loading data:', error);

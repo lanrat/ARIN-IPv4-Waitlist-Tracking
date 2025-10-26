@@ -32,7 +32,17 @@ jobs:
 
       - name: Run waitlist data collection
         run: |
-          python process.py --csv --no-header >> docs/waitlist_data.csv
+          # Copy current waitlist_data.json as previous for comparison
+          if [ -f data/waitlist_data.json ]; then
+            cp data/waitlist_data.json data/previous_waitlist_data.json
+          fi
+
+          # Run process.py with previous file comparison
+          if [ -f data/previous_waitlist_data.json ]; then
+            python process.py --csv --no-header --previous-file data/previous_waitlist_data.json >> docs/waitlist_data.csv
+          else
+            python process.py --csv --no-header >> docs/waitlist_data.csv
+          fi
 
       - name: Check for changes
         id: git-check
