@@ -21,7 +21,6 @@ Analyzes ARIN's IPv4 waiting list and estimates wait times based on historical c
 - **Interactive Dashboard**: Web-based visualizations with multiple charts:
   - Waitlist size over time
   - Request activity (added vs removed)
-  - Net change trends
   - Efficiency ratio (removed/added)
   - Block size competition
   - Request flexibility distribution
@@ -82,12 +81,11 @@ Open `docs/index.html` in a web browser or visit the [Live Dashboard](https://la
 
 1. **Waitlist Size Over Time** - Track total requests and breakdown by block size
 2. **Request Activity** - Compare added vs removed requests
-3. **Net Change Over Time** - Visualize waitlist growth/shrinkage
-4. **Efficiency Ratio** - Monitor removed/added ratio with break-even line
-5. **Block Size Competition** - Net change by CIDR size (/22, /23, /24)
-6. **Request Flexibility Distribution** - Pie chart of exact vs flexible requests
-7. **Desperation Index** - Track average flexibility over time
-8. **Request Age Distribution** - Stacked bar chart showing age ranges by block size
+3. **Efficiency Ratio** - Monitor removed/added ratio with break-even line
+4. **Block Size Competition** - Net change by CIDR size (/22, /23, /24)
+5. **Request Flexibility Distribution** - Pie chart of exact vs flexible requests
+6. **Desperation Index** - Track average flexibility over time
+7. **Request Age Distribution** - Stacked bar chart showing age ranges by block size
 
 ## Automation
 
