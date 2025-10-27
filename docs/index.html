@@ -336,6 +336,26 @@
                     <span class="stat-value" id="turnover-rate">-</span>
                 </div>
             </div>
+
+            <div class="stat-card">
+                <h3>Request Flexibility</h3>
+                <div class="stat-item">
+                    <span class="stat-label">Exact size requests:</span>
+                    <span class="stat-value" id="flex-exact">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Flexible requests:</span>
+                    <span class="stat-value" id="flex-flexible">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Avg flexibility:</span>
+                    <span class="stat-value" id="flex-avg">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Flexibility ratio:</span>
+                    <span class="stat-value" id="flex-ratio">-</span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -388,6 +408,41 @@
             <h2>Net Change Over Time</h2>
             <div class="chart-wrapper">
                 <canvas id="netChangeChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Efficiency Ratio (Removed / Added)</h2>
+            <div class="chart-wrapper">
+                <canvas id="efficiencyRatioChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Block Size Net Change Competition</h2>
+            <div class="chart-wrapper">
+                <canvas id="blockSizeCompetitionChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Request Flexibility Distribution</h2>
+            <div class="chart-wrapper">
+                <canvas id="flexibilityDistributionChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Desperation Index Over Time</h2>
+            <div class="chart-wrapper">
+                <canvas id="desperationIndexChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Request Age Distribution</h2>
+            <div class="chart-wrapper">
+                <canvas id="ageDistributionChart"></canvas>
             </div>
         </div>
     </div>
@@ -874,6 +929,18 @@
                 const turnoverRate = totalReq > 0 ? ((recentAdded + recentRemoved) / totalReq) * 100 : 0;
                 document.getElementById('turnover-rate').textContent = `${turnoverRate.toFixed(1)}%`;
 
+                // Update flexibility statistics
+                const flexExact = parseInt(latest.exact_requests) || 0;
+                const flexFlexible = parseInt(latest.flexible_requests) || 0;
+                const flexAvg = parseFloat(latest.avg_flexibility) || 0;
+                const flexTotal = flexExact + flexFlexible;
+                const flexRatio = flexTotal > 0 ? (flexFlexible / flexTotal) * 100 : 0;
+
+                document.getElementById('flex-exact').textContent = formatNumber(flexExact);
+                document.getElementById('flex-flexible').textContent = formatNumber(flexFlexible);
+                document.getElementById('flex-avg').textContent = flexAvg.toFixed(2) + ' CIDR levels';
+                document.getElementById('flex-ratio').textContent = flexRatio.toFixed(1) + '%';
+
                 // Show the statistics section
                 document.getElementById('statistics').style.display = 'block';
 
@@ -996,14 +1063,29 @@
                 // Filter out first data point
                 const filteredData = data.slice(1);
 
+                // Remove duplicate timestamps (keep last occurrence)
+                const uniqueData = [];
+                const seenTimestamps = new Set();
+
+                // Iterate backwards to keep the last occurrence of each timestamp
+                for (let i = filteredData.length - 1; i >= 0; i--) {
+                    const timestamp = filteredData[i].timestamp;
+                    if (!seenTimestamps.has(timestamp)) {
+                        seenTimestamps.add(timestamp);
+                        uniqueData.unshift(filteredData[i]);
+                    }
+                }
+
                 // Create dataset for net change
-                const netChangeData = filteredData.map(row => {
+                const netChangeData = uniqueData.map(row => {
                     const netChange = parseInt(row.net_change) || 0;
                     return {
                         x: new Date(row.timestamp),
                         y: netChange
                     };
                 });
+
+                console.log('Net Change Data Points:', netChangeData);
 
                 return new Chart(ctx, {
                     type: 'bar',
@@ -1022,7 +1104,264 @@
                                     point.y < 0 ? '#4ecdc4' :
                                     '#a0a0a0'
                                 ),
-                                borderWidth: 1
+                                borderWidth: 1,
+                                barThickness: 40,
+                                maxBarThickness: 60
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: title,
+                                color: themeColors.text
+                            },
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: {
+                                    color: themeColors.text
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    unit: 'month',
+                                    displayFormats: {
+                                        month: 'MMM yyyy'
+                                    }
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Time',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text,
+                                    autoSkip: false,
+                                    maxRotation: 45,
+                                    minRotation: 45
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                },
+                                offset: true
+                            },
+                            y: {
+                                beginAtZero: false,
+                                title: {
+                                    display: true,
+                                    text: 'Net Change (Added - Removed)',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text,
+                                    stepSize: 20
+                                },
+                                grid: {
+                                    color: themeColors.grid,
+                                    drawBorder: true
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error(`Error creating net change chart ${canvasId}:`, error);
+                throw error;
+            }
+        }
+
+        // Function to create efficiency ratio chart
+        function createEfficiencyRatioChart(canvasId, title, data) {
+            try {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                const themeColors = getThemeColors();
+
+                // Filter out first data point (no previous to compare)
+                const filteredData = data.slice(1);
+
+                // Calculate efficiency ratio for each data point
+                const ratioData = filteredData.map(row => {
+                    const added = parseInt(row.added_total) || 0;
+                    const removed = parseInt(row.removed_total) || 0;
+
+                    // Calculate ratio (removed / added)
+                    // If added is 0, treat as infinity or special case
+                    const ratio = added > 0 ? removed / added : (removed > 0 ? 999 : 1.0);
+
+                    return {
+                        x: new Date(row.timestamp),
+                        y: ratio
+                    };
+                });
+
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Efficiency Ratio',
+                                data: ratioData,
+                                borderColor: '#ffa500',
+                                backgroundColor: 'rgba(255, 165, 0, 0.1)',
+                                tension: 0.1,
+                                fill: true,
+                                borderWidth: 2
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: title,
+                                color: themeColors.text
+                            },
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: {
+                                    color: themeColors.text
+                                }
+                            },
+                            annotation: {
+                                annotations: {
+                                    line1: {
+                                        type: 'line',
+                                        yMin: 1.0,
+                                        yMax: 1.0,
+                                        borderColor: '#4ecdc4',
+                                        borderWidth: 2,
+                                        borderDash: [5, 5],
+                                        label: {
+                                            display: true,
+                                            content: 'Break-even (1.0)',
+                                            position: 'end',
+                                            color: themeColors.text
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    unit: 'day',
+                                    displayFormats: {
+                                        day: 'MMM dd, yyyy'
+                                    }
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Time',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            },
+                            y: {
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: 'Ratio (>1.0 = sustainable, <1.0 = growing backlog)',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error(`Error creating efficiency ratio chart ${canvasId}:`, error);
+                throw error;
+            }
+        }
+
+        // Function to create block size competition chart
+        function createBlockSizeCompetitionChart(canvasId, title, data) {
+            try {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                const themeColors = getThemeColors();
+
+                // Filter out first data point
+                const filteredData = data.slice(1);
+
+                // Create datasets for net change by block size
+                const netChange22Data = filteredData.map(row => {
+                    const added = parseInt(row.added_22) || 0;
+                    const removed = parseInt(row.removed_22) || 0;
+                    return {
+                        x: new Date(row.timestamp),
+                        y: added - removed
+                    };
+                });
+
+                const netChange23Data = filteredData.map(row => {
+                    const added = parseInt(row.added_23) || 0;
+                    const removed = parseInt(row.removed_23) || 0;
+                    return {
+                        x: new Date(row.timestamp),
+                        y: added - removed
+                    };
+                });
+
+                const netChange24Data = filteredData.map(row => {
+                    const added = parseInt(row.added_24) || 0;
+                    const removed = parseInt(row.removed_24) || 0;
+                    return {
+                        x: new Date(row.timestamp),
+                        y: added - removed
+                    };
+                });
+
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: [
+                            {
+                                label: '/22 Net Change',
+                                data: netChange22Data,
+                                borderColor: colors['/22'],
+                                backgroundColor: colors['/22'] + '20',
+                                tension: 0.1,
+                                fill: false,
+                                borderWidth: 2
+                            },
+                            {
+                                label: '/23 Net Change',
+                                data: netChange23Data,
+                                borderColor: colors['/23'],
+                                backgroundColor: colors['/23'] + '20',
+                                tension: 0.1,
+                                fill: false,
+                                borderWidth: 2
+                            },
+                            {
+                                label: '/24 Net Change',
+                                data: netChange24Data,
+                                borderColor: colors['/24'],
+                                backgroundColor: colors['/24'] + '20',
+                                tension: 0.1,
+                                fill: false,
+                                borderWidth: 2
                             }
                         ]
                     },
@@ -1074,15 +1413,318 @@
                                     color: themeColors.text
                                 },
                                 grid: {
-                                    color: themeColors.grid,
-                                    drawBorder: true
+                                    color: themeColors.grid
                                 }
                             }
                         }
                     }
                 });
             } catch (error) {
-                console.error(`Error creating net change chart ${canvasId}:`, error);
+                console.error(`Error creating block size competition chart ${canvasId}:`, error);
+                throw error;
+            }
+        }
+
+        // Function to create flexibility distribution pie chart
+        function createFlexibilityDistributionChart(canvasId, title, data) {
+            try {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                const themeColors = getThemeColors();
+
+                // Get the most recent data point
+                const latest = data[data.length - 1];
+                const flexibleRequests = parseInt(latest.flexible_requests) || 0;
+                const exactRequests = parseInt(latest.exact_requests) || 0;
+
+                return new Chart(ctx, {
+                    type: 'pie',
+                    data: {
+                        labels: ['Exact Size Requests', 'Flexible Range Requests'],
+                        datasets: [{
+                            data: [exactRequests, flexibleRequests],
+                            backgroundColor: [
+                                'rgba(255, 99, 132, 0.7)',
+                                'rgba(54, 162, 235, 0.7)'
+                            ],
+                            borderColor: [
+                                'rgba(255, 99, 132, 1)',
+                                'rgba(54, 162, 235, 1)'
+                            ],
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: title,
+                                color: themeColors.text
+                            },
+                            legend: {
+                                display: true,
+                                position: 'bottom',
+                                labels: {
+                                    color: themeColors.text,
+                                    generateLabels: function(chart) {
+                                        const data = chart.data;
+                                        const total = exactRequests + flexibleRequests;
+                                        return data.labels.map((label, i) => {
+                                            const value = data.datasets[0].data[i];
+                                            const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                                            return {
+                                                text: `${label}: ${value} (${percentage}%)`,
+                                                fillStyle: data.datasets[0].backgroundColor[i],
+                                                hidden: false,
+                                                index: i
+                                            };
+                                        });
+                                    }
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        const label = context.label || '';
+                                        const value = context.parsed;
+                                        const total = exactRequests + flexibleRequests;
+                                        const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                                        return `${label}: ${value} (${percentage}%)`;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error(`Error creating flexibility distribution chart ${canvasId}:`, error);
+                throw error;
+            }
+        }
+
+        // Function to create desperation index chart
+        function createDesperationIndexChart(canvasId, title, data) {
+            try {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                const themeColors = getThemeColors();
+
+                // Create dataset for average flexibility over time
+                const desperationData = data.map(row => {
+                    const avgFlex = parseFloat(row.avg_flexibility) || 0;
+                    return {
+                        x: new Date(row.timestamp),
+                        y: avgFlex
+                    };
+                });
+
+                return new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Average Flexibility (CIDR Range)',
+                                data: desperationData,
+                                borderColor: '#ff6b6b',
+                                backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                                tension: 0.3,
+                                fill: true,
+                                borderWidth: 2
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: title,
+                                color: themeColors.text
+                            },
+                            legend: {
+                                display: true,
+                                position: 'top',
+                                labels: {
+                                    color: themeColors.text
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        const value = context.parsed.y;
+                                        return `Avg Flexibility: ${value.toFixed(2)} CIDR levels`;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                type: 'time',
+                                time: {
+                                    unit: 'month',
+                                    displayFormats: {
+                                        month: 'MMM yyyy'
+                                    }
+                                },
+                                title: {
+                                    display: true,
+                                    text: 'Time',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            },
+                            y: {
+                                title: {
+                                    display: true,
+                                    text: 'Average Flexibility (higher = more desperate)',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error(`Error creating desperation index chart ${canvasId}:`, error);
+                throw error;
+            }
+        }
+
+        // Function to create age distribution bar chart
+        function createAgeDistributionChart(canvasId, title, data) {
+            try {
+                const ctx = document.getElementById(canvasId).getContext('2d');
+                const themeColors = getThemeColors();
+
+                // Get the most recent data point
+                const latest = data[data.length - 1];
+
+                // Parse age distribution by size
+                const age0_3_22 = parseInt(latest.age_0_3mo_22) || 0;
+                const age0_3_23 = parseInt(latest.age_0_3mo_23) || 0;
+                const age0_3_24 = parseInt(latest.age_0_3mo_24) || 0;
+
+                const age3_6_22 = parseInt(latest.age_3_6mo_22) || 0;
+                const age3_6_23 = parseInt(latest.age_3_6mo_23) || 0;
+                const age3_6_24 = parseInt(latest.age_3_6mo_24) || 0;
+
+                const age6_12_22 = parseInt(latest.age_6_12mo_22) || 0;
+                const age6_12_23 = parseInt(latest.age_6_12mo_23) || 0;
+                const age6_12_24 = parseInt(latest.age_6_12mo_24) || 0;
+
+                const age12_24_22 = parseInt(latest.age_12_24mo_22) || 0;
+                const age12_24_23 = parseInt(latest.age_12_24mo_23) || 0;
+                const age12_24_24 = parseInt(latest.age_12_24mo_24) || 0;
+
+                const age24plus_22 = parseInt(latest.age_24plus_22) || 0;
+                const age24plus_23 = parseInt(latest.age_24plus_23) || 0;
+                const age24plus_24 = parseInt(latest.age_24plus_24) || 0;
+
+                return new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['0-3 months', '3-6 months', '6-12 months', '1-2 years', '2+ years'],
+                        datasets: [
+                            {
+                                label: '/22 Requests',
+                                data: [age0_3_22, age3_6_22, age6_12_22, age12_24_22, age24plus_22],
+                                backgroundColor: 'rgba(255, 99, 132, 0.7)',
+                                borderColor: 'rgba(255, 99, 132, 1)',
+                                borderWidth: 1
+                            },
+                            {
+                                label: '/23 Requests',
+                                data: [age0_3_23, age3_6_23, age6_12_23, age12_24_23, age24plus_23],
+                                backgroundColor: 'rgba(54, 162, 235, 0.7)',
+                                borderColor: 'rgba(54, 162, 235, 1)',
+                                borderWidth: 1
+                            },
+                            {
+                                label: '/24 Requests',
+                                data: [age0_3_24, age3_6_24, age6_12_24, age12_24_24, age24plus_24],
+                                backgroundColor: 'rgba(75, 192, 192, 0.7)',
+                                borderColor: 'rgba(75, 192, 192, 1)',
+                                borderWidth: 1
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: title,
+                                color: themeColors.text
+                            },
+                            legend: {
+                                display: true,
+                                labels: {
+                                    color: themeColors.text
+                                }
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    afterLabel: function(context) {
+                                        // Calculate total for this age range across all sizes
+                                        const datasetIndex = context.datasetIndex;
+                                        const ageIndex = context.dataIndex;
+                                        let total = 0;
+                                        context.chart.data.datasets.forEach(dataset => {
+                                            total += dataset.data[ageIndex] || 0;
+                                        });
+                                        const percentage = total > 0 ? ((context.parsed.y / total) * 100).toFixed(1) : 0;
+                                        return `${percentage}% of age range`;
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                stacked: true,
+                                title: {
+                                    display: true,
+                                    text: 'Age Range',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            },
+                            y: {
+                                stacked: true,
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: 'Number of Requests',
+                                    color: themeColors.text
+                                },
+                                ticks: {
+                                    color: themeColors.text
+                                },
+                                grid: {
+                                    color: themeColors.grid
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error(`Error creating age distribution chart ${canvasId}:`, error);
                 throw error;
             }
         }
@@ -1165,6 +1807,21 @@
 
                 // Create net change chart
                 createNetChangeChart('netChangeChart', 'Net Change Over Time', data);
+
+                // Create efficiency ratio chart
+                createEfficiencyRatioChart('efficiencyRatioChart', 'Clearing Efficiency Over Time', data);
+
+                // Create block size competition chart
+                createBlockSizeCompetitionChart('blockSizeCompetitionChart', 'Net Change by Block Size', data);
+
+                // Create flexibility distribution chart
+                createFlexibilityDistributionChart('flexibilityDistributionChart', 'Request Flexibility Distribution', data);
+
+                // Create desperation index chart
+                createDesperationIndexChart('desperationIndexChart', 'Desperation Index Over Time', data);
+
+                // Create age distribution chart
+                createAgeDistributionChart('ageDistributionChart', 'Current Request Age Distribution', data);
 
             } catch (error) {
                 console.error('Error loading data:', error);

@@ -11,7 +11,7 @@ import csv
 import sys
 import os
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 
 # --- URLs for the data ---
 HISTORICAL_DATA_URL = 'https://www.arin.net/resources/guide/ipv4/blocks_cleared/waiting_list_blocks_issued.csv'
@@ -64,7 +64,8 @@ def load_waitlist_data(file_path):
 def compare_waitlists(current_data, previous_data):
     """
     Compare current and previous waitlist data to determine added and removed requests.
-    Returns (added_by_cidr, removed_by_cidr, added_count, removed_count)
+    Returns (added_by_cidr, removed_by_cidr, added_count, removed_count,
+             flexibility_stats, size_change_stats)
     """
     # Create sets of request identifiers (waitListActionDate) for comparison
     current_requests = {item['waitListActionDate']: item for item in current_data}
@@ -90,13 +91,184 @@ def compare_waitlists(current_data, previous_data):
     added_count = len(added_ids)
     removed_count = len(removed_ids)
 
-    return added_by_cidr, removed_by_cidr, added_count, removed_count
+    # Calculate flexibility statistics
+    flexible_count = 0
+    exact_count = 0
+    total_flexibility = 0
+
+    for item in current_data:
+        min_cidr = item.get('minimumCidr')
+        max_cidr = item.get('maximumCidr')
+
+        if min_cidr is not None and max_cidr is not None:
+            if min_cidr == max_cidr:
+                exact_count += 1
+            else:
+                flexible_count += 1
+            # Calculate flexibility as the range
+            # Note: In CIDR notation, SMALLER numbers = LARGER networks
+            # So minimumCidr=24, maximumCidr=22 means "willing to accept /24 up to /22"
+            # Flexibility = how many CIDR levels they'll accept (abs value)
+            total_flexibility += abs(max_cidr - min_cidr)
+
+    total_requests = len(current_data)
+    avg_flexibility = total_flexibility / total_requests if total_requests > 0 else 0
+
+    # Track requests that changed their size requirements
+    size_changes = 0
+    upsize_changes = 0  # Changed to want larger blocks (smaller CIDR number)
+    downsize_changes = 0  # Changed to want smaller blocks (larger CIDR number)
+    flexibility_changes = 0  # Changed from exact to flexible or vice versa
+
+    for req_id in set(current_requests.keys()) & set(previous_requests.keys()):
+        curr = current_requests[req_id]
+        prev = previous_requests[req_id]
+
+        curr_min = curr.get('minimumCidr')
+        curr_max = curr.get('maximumCidr')
+        prev_min = prev.get('minimumCidr')
+        prev_max = prev.get('maximumCidr')
+
+        if all(x is not None for x in [curr_min, curr_max, prev_min, prev_max]):
+            # Check if anything changed
+            if curr_min != prev_min or curr_max != prev_max:
+                size_changes += 1
+
+                # Check if maximum changed (what they're willing to accept)
+                if curr_max < prev_max:  # Wants larger block now
+                    upsize_changes += 1
+                elif curr_max > prev_max:  # Wants smaller block now
+                    downsize_changes += 1
+
+                # Check if flexibility changed
+                prev_flexible = (prev_min != prev_max)
+                curr_flexible = (curr_min != curr_max)
+                if prev_flexible != curr_flexible:
+                    flexibility_changes += 1
+
+    flexibility_stats = {
+        'flexible_requests': flexible_count,
+        'exact_requests': exact_count,
+        'avg_flexibility': avg_flexibility
+    }
+
+    size_change_stats = {
+        'size_changes': size_changes,
+        'upsize_changes': upsize_changes,
+        'downsize_changes': downsize_changes,
+        'flexibility_changes': flexibility_changes
+    }
+
+    return added_by_cidr, removed_by_cidr, added_count, removed_count, flexibility_stats, size_change_stats
+
+def calculate_age_distribution(waitlist_data, reference_time=None):
+    """
+    Calculate age distribution of requests in the waitlist.
+    Returns age statistics as bins (0-3mo, 3-6mo, 6-12mo, 1-2yr, 2+yr)
+    """
+    if reference_time is None:
+        reference_time = datetime.now(timezone.utc)
+    elif isinstance(reference_time, str):
+        # Parse ISO format timestamp
+        reference_time = datetime.fromisoformat(reference_time.replace('Z', '+00:00'))
+
+    # Ensure reference_time is timezone-aware
+    if reference_time.tzinfo is None:
+        reference_time = reference_time.replace(tzinfo=timezone.utc)
+
+    age_bins = {
+        '0-3_months': 0,
+        '3-6_months': 0,
+        '6-12_months': 0,
+        '12-24_months': 0,
+        '24+_months': 0
+    }
+
+    # Track age bins by CIDR size for stacked charts
+    age_bins_by_size = {
+        '0-3_months': {'22': 0, '23': 0, '24': 0},
+        '3-6_months': {'22': 0, '23': 0, '24': 0},
+        '6-12_months': {'22': 0, '23': 0, '24': 0},
+        '12-24_months': {'22': 0, '23': 0, '24': 0},
+        '24+_months': {'22': 0, '23': 0, '24': 0}
+    }
+
+    ages_days = []
+
+    for item in waitlist_data:
+        action_date_str = item.get('waitListActionDate')
+        if not action_date_str:
+            continue
+
+        try:
+            # Parse the action date
+            action_date = datetime.fromisoformat(action_date_str.replace('Z', '+00:00'))
+
+            # Calculate age in days
+            age_days = (reference_time - action_date).days
+            ages_days.append(age_days)
+
+            # Determine CIDR size
+            min_cidr = item.get('minimumCidr')
+            cidr_key = str(min_cidr) if min_cidr in [22, 23, 24] else None
+
+            # Bin by age
+            age_months = age_days / 30.44  # Average days per month
+
+            if age_months < 3:
+                age_bins['0-3_months'] += 1
+                if cidr_key:
+                    age_bins_by_size['0-3_months'][cidr_key] += 1
+            elif age_months < 6:
+                age_bins['3-6_months'] += 1
+                if cidr_key:
+                    age_bins_by_size['3-6_months'][cidr_key] += 1
+            elif age_months < 12:
+                age_bins['6-12_months'] += 1
+                if cidr_key:
+                    age_bins_by_size['6-12_months'][cidr_key] += 1
+            elif age_months < 24:
+                age_bins['12-24_months'] += 1
+                if cidr_key:
+                    age_bins_by_size['12-24_months'][cidr_key] += 1
+            else:
+                age_bins['24+_months'] += 1
+                if cidr_key:
+                    age_bins_by_size['24+_months'][cidr_key] += 1
+
+        except (ValueError, AttributeError) as e:
+            # Skip malformed dates
+            continue
+
+    # Calculate statistics
+    avg_age_days = sum(ages_days) / len(ages_days) if ages_days else 0
+    min_age_days = min(ages_days) if ages_days else 0
+    max_age_days = max(ages_days) if ages_days else 0
+    median_age_days = sorted(ages_days)[len(ages_days) // 2] if ages_days else 0
+
+    return {
+        'bins': age_bins,
+        'bins_by_size': age_bins_by_size,
+        'avg_age_days': avg_age_days,
+        'min_age_days': min_age_days,
+        'max_age_days': max_age_days,
+        'median_age_days': median_age_days
+    }
 
 def output_csv(total_requests, requests_22, requests_23, requests_24,
                avg_22_cleared, avg_23_cleared, avg_24_cleared,
                quarters_22, quarters_23, quarters_24, years_22, years_23, years_24,
                added_22=0, added_23=0, added_24=0, added_total=0,
                removed_22=0, removed_23=0, removed_24=0, removed_total=0,
+               flexible_requests=0, exact_requests=0, avg_flexibility=0.0,
+               size_changes=0, upsize_changes=0, downsize_changes=0, flexibility_changes=0,
+               age_0_3mo=0, age_3_6mo=0, age_6_12mo=0, age_12_24mo=0, age_24plus=0,
+               avg_age_days=0, median_age_days=0, min_age_days=0, max_age_days=0,
+               age_0_3mo_22=0, age_0_3mo_23=0, age_0_3mo_24=0,
+               age_3_6mo_22=0, age_3_6mo_23=0, age_3_6mo_24=0,
+               age_6_12mo_22=0, age_6_12mo_23=0, age_6_12mo_24=0,
+               age_12_24mo_22=0, age_12_24mo_23=0, age_12_24mo_24=0,
+               age_24plus_22=0, age_24plus_23=0, age_24plus_24=0,
                include_header=True):
     """Output data in CSV format with columns for easy time series tracking"""
     writer = csv.writer(sys.stdout)
@@ -118,6 +290,37 @@ def output_csv(total_requests, requests_22, requests_23, requests_24,
             'removed_24',
             'removed_total',
             'net_change',
+            'flexible_requests',
+            'exact_requests',
+            'avg_flexibility',
+            'size_changes',
+            'upsize_changes',
+            'downsize_changes',
+            'flexibility_changes',
+            'age_0_3_months',
+            'age_3_6_months',
+            'age_6_12_months',
+            'age_12_24_months',
+            'age_24plus_months',
+            'avg_age_days',
+            'median_age_days',
+            'min_age_days',
+            'max_age_days',
+            'age_0_3mo_22',
+            'age_0_3mo_23',
+            'age_0_3mo_24',
+            'age_3_6mo_22',
+            'age_3_6mo_23',
+            'age_3_6mo_24',
+            'age_6_12mo_22',
+            'age_6_12mo_23',
+            'age_6_12mo_24',
+            'age_12_24mo_22',
+            'age_12_24mo_23',
+            'age_12_24mo_24',
+            'age_24plus_22',
+            'age_24plus_23',
+            'age_24plus_24',
             'avg_22_cleared_per_quarter',
             'avg_23_cleared_per_quarter',
             'avg_24_cleared_per_quarter',
@@ -151,6 +354,37 @@ def output_csv(total_requests, requests_22, requests_23, requests_24,
         removed_24,
         removed_total,
         net_change,
+        flexible_requests,
+        exact_requests,
+        f'{avg_flexibility:.2f}',
+        size_changes,
+        upsize_changes,
+        downsize_changes,
+        flexibility_changes,
+        age_0_3mo,
+        age_3_6mo,
+        age_6_12mo,
+        age_12_24mo,
+        age_24plus,
+        f'{avg_age_days:.1f}',
+        f'{median_age_days:.1f}',
+        min_age_days,
+        max_age_days,
+        age_0_3mo_22,
+        age_0_3mo_23,
+        age_0_3mo_24,
+        age_3_6mo_22,
+        age_3_6mo_23,
+        age_3_6mo_24,
+        age_6_12mo_22,
+        age_6_12mo_23,
+        age_6_12mo_24,
+        age_12_24mo_22,
+        age_12_24mo_23,
+        age_12_24mo_24,
+        age_24plus_22,
+        age_24plus_23,
+        age_24plus_24,
         f'{avg_22_cleared:.1f}',
         f'{avg_23_cleared:.1f}',
         f'{avg_24_cleared:.1f}',
@@ -282,6 +516,37 @@ def reprocess_git_history(output_file):
             'removed_24',
             'removed_total',
             'net_change',
+            'flexible_requests',
+            'exact_requests',
+            'avg_flexibility',
+            'size_changes',
+            'upsize_changes',
+            'downsize_changes',
+            'flexibility_changes',
+            'age_0_3_months',
+            'age_3_6_months',
+            'age_6_12_months',
+            'age_12_24_months',
+            'age_24plus_months',
+            'avg_age_days',
+            'median_age_days',
+            'min_age_days',
+            'max_age_days',
+            'age_0_3mo_22',
+            'age_0_3mo_23',
+            'age_0_3mo_24',
+            'age_3_6mo_22',
+            'age_3_6mo_23',
+            'age_3_6mo_24',
+            'age_6_12mo_22',
+            'age_6_12mo_23',
+            'age_6_12mo_24',
+            'age_12_24mo_22',
+            'age_12_24mo_23',
+            'age_12_24mo_24',
+            'age_24plus_22',
+            'age_24plus_23',
+            'age_24plus_24',
             'avg_22_cleared_per_quarter',
             'avg_23_cleared_per_quarter',
             'avg_24_cleared_per_quarter',
@@ -319,7 +584,7 @@ def reprocess_git_history(output_file):
                 continue
 
             # Compare with previous data
-            added_by_cidr, removed_by_cidr, added_total, removed_total = compare_waitlists(waitlist_data, previous_data)
+            added_by_cidr, removed_by_cidr, added_total, removed_total, flexibility_stats, size_change_stats = compare_waitlists(waitlist_data, previous_data)
 
             # Count by size
             requests_list = [str(item['maximumCidr']) for item in waitlist_data if 'maximumCidr' in item]
@@ -375,6 +640,9 @@ def reprocess_git_history(output_file):
             years_23 = quarters_23 / 4
             years_24 = quarters_24 / 4
 
+            # Calculate age distribution for this commit
+            age_dist = calculate_age_distribution(waitlist_data, commit_date)
+
             # Write to CSV
             net_change = added_total - removed_total
             writer.writerow([
@@ -392,6 +660,37 @@ def reprocess_git_history(output_file):
                 removed_24,
                 removed_total,
                 net_change,
+                flexibility_stats['flexible_requests'],
+                flexibility_stats['exact_requests'],
+                f"{flexibility_stats['avg_flexibility']:.2f}",
+                size_change_stats['size_changes'],
+                size_change_stats['upsize_changes'],
+                size_change_stats['downsize_changes'],
+                size_change_stats['flexibility_changes'],
+                age_dist['bins']['0-3_months'],
+                age_dist['bins']['3-6_months'],
+                age_dist['bins']['6-12_months'],
+                age_dist['bins']['12-24_months'],
+                age_dist['bins']['24+_months'],
+                f"{age_dist['avg_age_days']:.1f}",
+                f"{age_dist['median_age_days']:.1f}",
+                age_dist['min_age_days'],
+                age_dist['max_age_days'],
+                age_dist['bins_by_size']['0-3_months']['22'],
+                age_dist['bins_by_size']['0-3_months']['23'],
+                age_dist['bins_by_size']['0-3_months']['24'],
+                age_dist['bins_by_size']['3-6_months']['22'],
+                age_dist['bins_by_size']['3-6_months']['23'],
+                age_dist['bins_by_size']['3-6_months']['24'],
+                age_dist['bins_by_size']['6-12_months']['22'],
+                age_dist['bins_by_size']['6-12_months']['23'],
+                age_dist['bins_by_size']['6-12_months']['24'],
+                age_dist['bins_by_size']['12-24_months']['22'],
+                age_dist['bins_by_size']['12-24_months']['23'],
+                age_dist['bins_by_size']['12-24_months']['24'],
+                age_dist['bins_by_size']['24+_months']['22'],
+                age_dist['bins_by_size']['24+_months']['23'],
+                age_dist['bins_by_size']['24+_months']['24'],
                 f'{avg_22_cleared:.1f}',
                 f'{avg_23_cleared:.1f}',
                 f'{avg_24_cleared:.1f}',
@@ -480,7 +779,7 @@ try:
         previous_data, _ = load_waitlist_data(args.previous_file)
 
     # Compare with previous data to get adds/removes
-    added_by_cidr, removed_by_cidr, added_total, removed_total = compare_waitlists(waitlist_data, previous_data)
+    added_by_cidr, removed_by_cidr, added_total, removed_total, flexibility_stats, size_change_stats = compare_waitlists(waitlist_data, previous_data)
 
     # Count the number of requests for each prefix size based on 'maximumCidr'
     requests_list = [str(item['maximumCidr']) for item in waitlist_data if 'maximumCidr' in item]
@@ -499,6 +798,9 @@ try:
     removed_22 = removed_by_cidr.get('22', 0)
     removed_23 = removed_by_cidr.get('23', 0)
     removed_24 = removed_by_cidr.get('24', 0)
+
+    # Calculate age distribution
+    age_dist = calculate_age_distribution(waitlist_data, data_timestamp)
 
 except requests.exceptions.RequestException as e:
     print(f"Error fetching waitlist JSON: {e}", file=sys.stderr)
@@ -556,6 +858,37 @@ if args.csv:
                quarters_22, quarters_23, quarters_24, years_22, years_23, years_24,
                added_22, added_23, added_24, added_total,
                removed_22, removed_23, removed_24, removed_total,
+               flexibility_stats['flexible_requests'],
+               flexibility_stats['exact_requests'],
+               flexibility_stats['avg_flexibility'],
+               size_change_stats['size_changes'],
+               size_change_stats['upsize_changes'],
+               size_change_stats['downsize_changes'],
+               size_change_stats['flexibility_changes'],
+               age_dist['bins']['0-3_months'],
+               age_dist['bins']['3-6_months'],
+               age_dist['bins']['6-12_months'],
+               age_dist['bins']['12-24_months'],
+               age_dist['bins']['24+_months'],
+               age_dist['avg_age_days'],
+               age_dist['median_age_days'],
+               age_dist['min_age_days'],
+               age_dist['max_age_days'],
+               age_dist['bins_by_size']['0-3_months']['22'],
+               age_dist['bins_by_size']['0-3_months']['23'],
+               age_dist['bins_by_size']['0-3_months']['24'],
+               age_dist['bins_by_size']['3-6_months']['22'],
+               age_dist['bins_by_size']['3-6_months']['23'],
+               age_dist['bins_by_size']['3-6_months']['24'],
+               age_dist['bins_by_size']['6-12_months']['22'],
+               age_dist['bins_by_size']['6-12_months']['23'],
+               age_dist['bins_by_size']['6-12_months']['24'],
+               age_dist['bins_by_size']['12-24_months']['22'],
+               age_dist['bins_by_size']['12-24_months']['23'],
+               age_dist['bins_by_size']['12-24_months']['24'],
+               age_dist['bins_by_size']['24+_months']['22'],
+               age_dist['bins_by_size']['24+_months']['23'],
+               age_dist['bins_by_size']['24+_months']['24'],
                include_header=not args.no_header)
 else:
     output_text(total_requests, requests_22, requests_23, requests_24,
