@@ -17,16 +17,17 @@ Analyzes ARIN's IPv4 waiting list and estimates wait times based on historical c
 - **Flexibility Analysis**: Tracks how many requesters are willing to accept different block sizes
 - **Age Distribution**: Analyzes how long requests have been waiting, broken down by CIDR size
 - **Git History Integration**: Uses git commits to track waitlist changes over time
-- **Time-Series Data**: Exports comprehensive CSV data (54 columns) for analysis
-- **Interactive Dashboard**: Web-based visualizations with multiple charts:
+- **Time-Series Data**: Exports comprehensive CSV data (38 columns) for analysis
+- **Interactive Dashboard**: Web-based visualizations with 9 charts:
   - Waitlist size over time
+  - Historical blocks cleared per quarter
+  - Estimated wait time (years)
+  - Total processing capacity over time
   - Request activity (added vs removed)
   - Efficiency ratio (removed/added)
-  - Block size competition
-  - Request flexibility distribution
-  - Desperation index
-  - Age distribution (stacked by block size)
-  - Wait time estimates
+  - Block size net change competition
+  - Request flexibility distribution (pie chart)
+  - Current request age distribution (stacked bar chart)
 
 ## Usage
 
@@ -62,7 +63,7 @@ python process.py --reprocess-history --output-csv docs/waitlist_data.csv
 
 ## Output Files
 
-- `docs/waitlist_data.csv` - Time-series data for dashboard (54 columns including counts, churn, flexibility, age distribution)
+- `docs/waitlist_data.csv` - Time-series data for dashboard (38 columns including counts, churn, flexibility, age distribution)
 - `data/waitlist_data.json` - Current waitlist snapshot (tracked in git)
 - `data/historical_data.csv` - Historical clearing data (cached from ARIN)
 
@@ -79,13 +80,15 @@ Open `docs/index.html` in a web browser or visit the [Live Dashboard](https://la
 
 ### Interactive Charts
 
-1. **Waitlist Size Over Time** - Track total requests and breakdown by block size
-2. **Request Activity** - Compare added vs removed requests
-3. **Efficiency Ratio** - Monitor removed/added ratio with break-even line
-4. **Block Size Competition** - Net change by CIDR size (/22, /23, /24)
-5. **Request Flexibility Distribution** - Pie chart of exact vs flexible requests
-6. **Desperation Index** - Track average flexibility over time
-7. **Request Age Distribution** - Stacked bar chart showing age ranges by block size
+1. **Current Waitlist Size** - Track total requests and breakdown by block size over time
+2. **Historical Blocks Cleared Per Quarter** - Average processing rate by block size
+3. **Estimated Wait Time** - Projected years to clear current queue by block size
+4. **Total Processing Capacity Over Time** - Combined clearing capacity across all sizes
+5. **Request Activity** - Compare added vs removed requests over time
+6. **Efficiency Ratio** - Monitor removed/added ratio with break-even line at 1.0
+7. **Block Size Net Change Competition** - Net change by CIDR size (/22, /23, /24)
+8. **Request Flexibility Distribution** - Pie chart of exact vs flexible requests
+9. **Current Request Age Distribution** - Stacked bar chart showing age ranges by block size
 
 ## Automation
 
@@ -101,14 +104,14 @@ Manual runs available via workflow dispatch.
 
 ## Data Columns
 
-The CSV file contains 54 columns tracking:
+The CSV file contains 38 columns tracking:
 
-- **Basic Counts**: Total requests and breakdown by CIDR size
+- **Basic Counts**: Total requests and breakdown by CIDR size (/22, /23, /24)
 - **Churn Metrics**: Added/removed requests by size, net change
-- **Flexibility**: Exact vs flexible requests, average flexibility, size change tracking
-- **Age Distribution**: 5 age ranges (0-3mo, 3-6mo, 6-12mo, 12-24mo, 24+mo)
-- **Age by Size**: Age distribution broken down by CIDR size (for stacked charts)
-- **Wait Time Estimates**: Quarters and years to clear queue by size
+- **Flexibility**: Exact vs flexible requests, average flexibility
+- **Age by Size**: Age distribution broken down by CIDR size across 5 age ranges (0-3mo, 3-6mo, 6-12mo, 12-24mo, 24+mo)
+- **Processing Rates**: Average blocks cleared per quarter by size
+- **Wait Time Estimates**: Estimated years to clear queue by size
 
 ## Requirements
 

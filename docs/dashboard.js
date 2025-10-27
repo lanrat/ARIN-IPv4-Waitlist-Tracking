@@ -1057,104 +1057,6 @@ function createFlexibilityDistributionChart(canvasId, title, data) {
     }
 }
 
-// Function to create desperation index chart
-function createDesperationIndexChart(canvasId, title, data) {
-    try {
-        const ctx = document.getElementById(canvasId).getContext('2d');
-        const themeColors = getThemeColors();
-
-        // Create dataset for average flexibility over time
-        const desperationData = data.map(row => {
-            const avgFlex = parseFloat(row.avg_flexibility) || 0;
-            return {
-                x: new Date(row.timestamp),
-                y: avgFlex
-            };
-        });
-
-        return new Chart(ctx, {
-            type: 'line',
-            data: {
-                datasets: [
-                    {
-                        label: 'Average Flexibility (CIDR Range)',
-                        data: desperationData,
-                        borderColor: '#ff6b6b',
-                        backgroundColor: 'rgba(255, 107, 107, 0.1)',
-                        tension: 0.3,
-                        fill: true,
-                        borderWidth: 2
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    title: {
-                        display: true,
-                        text: title,
-                        color: themeColors.text
-                    },
-                    legend: {
-                        display: true,
-                        position: 'top',
-                        labels: {
-                            color: themeColors.text
-                        }
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                const value = context.parsed.y;
-                                return `Avg Flexibility: ${value.toFixed(2)} CIDR levels`;
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    x: {
-                        type: 'time',
-                        time: {
-                            unit: 'month',
-                            displayFormats: {
-                                month: 'MMM yyyy'
-                            }
-                        },
-                        title: {
-                            display: true,
-                            text: 'Time',
-                            color: themeColors.text
-                        },
-                        ticks: {
-                            color: themeColors.text
-                        },
-                        grid: {
-                            color: themeColors.grid
-                        }
-                    },
-                    y: {
-                        title: {
-                            display: true,
-                            text: 'Average Flexibility (higher = more desperate)',
-                            color: themeColors.text
-                        },
-                        ticks: {
-                            color: themeColors.text
-                        },
-                        grid: {
-                            color: themeColors.grid
-                        }
-                    }
-                }
-            }
-        });
-    } catch (error) {
-        console.error(`Error creating desperation index chart ${canvasId}:`, error);
-        throw error;
-    }
-}
-
 // Function to create age distribution bar chart
 function createAgeDistributionChart(canvasId, title, data) {
     try {
@@ -1320,7 +1222,7 @@ function updateLastUpdated(data) {
  * 1. Fetches the CSV file containing time-series data
  * 2. Parses the CSV into structured data
  * 3. Updates all statistics cards
- * 4. Creates all 7 charts
+ * 4. Creates all 9 charts
  * 5. Handles loading states and errors
  *
  * Called automatically when the DOM is ready.
@@ -1392,10 +1294,7 @@ async function loadData() {
         // Chart 8: Flexibility Distribution - Pie chart: exact vs flexible requesters
         createFlexibilityDistributionChart('flexibilityDistributionChart', 'Request Flexibility Distribution', data);
 
-        // Chart 9: Desperation Index - Tracks average flexibility over time
-        createDesperationIndexChart('desperationIndexChart', 'Desperation Index Over Time', data);
-
-        // Chart 10: Age Distribution - Stacked bar chart showing request ages by CIDR size
+        // Chart 9: Age Distribution - Stacked bar chart showing request ages by CIDR size
         createAgeDistributionChart('ageDistributionChart', 'Current Request Age Distribution', data);
 
     } catch (error) {
