@@ -2150,11 +2150,6 @@
     "maximumCidr": 24
   },
   {
-    "waitListActionDate": "2025-10-16T12:07:58.459+00:00",
-    "minimumCidr": 22,
-    "maximumCidr": 22
-  },
-  {
     "waitListActionDate": "2025-10-16T13:10:23.664+00:00",
     "minimumCidr": 22,
     "maximumCidr": 22
@@ -2370,11 +2365,6 @@
     "maximumCidr": 24
   },
   {
-    "waitListActionDate": "2025-11-03T20:15:03.566+00:00",
-    "minimumCidr": 22,
-    "maximumCidr": 22
-  },
-  {
     "waitListActionDate": "2025-11-03T21:48:46.830+00:00",
     "minimumCidr": 22,
     "maximumCidr": 22
@@ -2431,6 +2421,66 @@
   },
   {
     "waitListActionDate": "2025-11-10T20:14:17.895+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-11-12T13:51:11.647+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-11-13T11:53:42.986+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-11-13T20:12:55.903+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-11-13T20:16:57.957+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-11-14T23:37:29.408+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-11-17T12:47:31.454+00:00",
+    "minimumCidr": 23,
+    "maximumCidr": 23
+  },
+  {
+    "waitListActionDate": "2025-11-17T19:48:33.557+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-11-18T11:44:54.186+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-11-18T15:26:41.240+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-11-18T17:18:42.048+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-11-18T18:20:38.708+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-11-18T23:29:56.981+00:00",
     "minimumCidr": 24,
     "maximumCidr": 24
   }
