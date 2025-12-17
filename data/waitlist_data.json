@@ -705,11 +705,6 @@
     "maximumCidr": 24
   },
   {
-    "waitListActionDate": "2025-04-04T21:35:45.334+00:00",
-    "minimumCidr": 23,
-    "maximumCidr": 23
-  },
-  {
     "waitListActionDate": "2025-04-07T12:18:39.983+00:00",
     "minimumCidr": 22,
     "maximumCidr": 22
@@ -2618,5 +2613,75 @@
     "waitListActionDate": "2025-12-09T23:58:51.758+00:00",
     "minimumCidr": 22,
     "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-12-10T16:03:50.257+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-12-11T21:20:42.426+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-12-11T23:13:42.098+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-12-12T20:32:25.128+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-12-12T23:53:19.175+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-12-15T14:01:54.203+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-12-15T18:43:31.561+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-12-15T22:13:31.186+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-12-16T12:04:04.680+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-12-16T13:01:07.380+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-12-16T13:13:42.452+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-12-16T17:23:59.388+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
+  },
+  {
+    "waitListActionDate": "2025-12-16T19:39:20.376+00:00",
+    "minimumCidr": 22,
+    "maximumCidr": 22
+  },
+  {
+    "waitListActionDate": "2025-12-16T22:53:53.618+00:00",
+    "minimumCidr": 24,
+    "maximumCidr": 24
   }
 ]
