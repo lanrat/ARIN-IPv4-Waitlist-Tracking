@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -43,6 +43,9 @@ jobs:
           else
             python process.py --csv --no-header >> docs/waitlist_data.csv
           fi
+
+      - name: Cleanup temporary files
+        run: rm -f data/previous_waitlist_data.json
 
       - name: Check for changes
         id: git-check
