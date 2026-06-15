@@ -1810,11 +1810,6 @@
     "waitListActionDate": "2026-01-20T17:52:48.128Z"
   },
   {
-    "maximumCidr": 24,
-    "minimumCidr": 24,
-    "waitListActionDate": "2026-01-20T19:35:11.895Z"
-  },
-  {
     "maximumCidr": 22,
     "minimumCidr": 22,
     "waitListActionDate": "2026-01-21T15:06:41.025Z"
@@ -3033,5 +3028,95 @@
     "maximumCidr": 24,
     "minimumCidr": 24,
     "waitListActionDate": "2026-05-29T22:04:52.837Z"
+  },
+  {
+    "maximumCidr": 23,
+    "minimumCidr": 23,
+    "waitListActionDate": "2026-06-02T15:14:41.085Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-06-02T16:30:55.325Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-06-02T18:49:10.801Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-06-03T15:04:27.471Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-06-03T21:54:24.956Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-06-04T11:47:26.329Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-06-04T19:59:13.403Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-06-05T13:39:32.116Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-06-08T12:46:55.122Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-06-08T19:25:46.599Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-06-08T19:26:56.292Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-06-10T22:28:13.640Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-06-11T14:30:26.319Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-06-11T18:36:28.918Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-06-11T20:40:03.419Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-06-12T19:31:23.130Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-06-12T20:25:26.060Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-06-12T22:37:19.614Z"
   }
 ]
