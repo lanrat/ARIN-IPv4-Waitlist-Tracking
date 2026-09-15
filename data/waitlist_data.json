@@ -1402,11 +1402,6 @@
   {
     "maximumCidr": 24,
     "minimumCidr": 24,
-    "waitListActionDate": "2026-05-06T21:08:27.547Z"
-  },
-  {
-    "maximumCidr": 24,
-    "minimumCidr": 24,
     "waitListActionDate": "2026-05-06T21:31:31.040Z"
   },
   {
@@ -2207,11 +2202,6 @@
   {
     "maximumCidr": 24,
     "minimumCidr": 24,
-    "waitListActionDate": "2026-08-07T20:58:43.193Z"
-  },
-  {
-    "maximumCidr": 24,
-    "minimumCidr": 24,
     "waitListActionDate": "2026-08-10T11:37:07.587Z"
   },
   {
@@ -2403,5 +2393,70 @@
     "maximumCidr": 22,
     "minimumCidr": 22,
     "waitListActionDate": "2026-08-31T18:13:54.243Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-09-03T11:31:26.342Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-09-03T12:44:23.204Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-09-04T13:00:05.810Z"
+  },
+  {
+    "maximumCidr": 23,
+    "minimumCidr": 23,
+    "waitListActionDate": "2026-09-04T17:44:16.945Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-09-08T11:59:50.911Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-09-08T14:37:08.978Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-09-08T16:40:34.100Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-09-09T20:29:03.714Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-09-10T17:40:01.150Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-09-11T00:12:59.298Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-09-11T14:25:42.775Z"
+  },
+  {
+    "maximumCidr": 24,
+    "minimumCidr": 24,
+    "waitListActionDate": "2026-09-11T22:10:57.709Z"
+  },
+  {
+    "maximumCidr": 22,
+    "minimumCidr": 22,
+    "waitListActionDate": "2026-09-14T18:16:19.499Z"
   }
 ]
