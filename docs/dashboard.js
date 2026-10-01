@@ -12,7 +12,9 @@
  * - Real-time statistics cards
  * - Responsive design for mobile and desktop
  *
- * Data Source: docs/waitlist_data.csv (54 columns of time-series data)
+ * Data Sources: docs/waitlist_data.csv (time-series, one row per snapshot)
+ *               docs/issued_by_quarter.csv (address space ARIN issued per quarter)
+ *               docs/fills_by_batch.csv (how long filled requests waited, per batch and size)
  * Chart Library: Chart.js with Time and Adapter-Date-Fns plugins
  */
 
@@ -73,11 +75,13 @@ function parseCSV(csvText) {
 
     // Sort data by timestamp to ensure proper chronological order
     // This is important for time-series charts to render correctly
-    data.sort((a, b) => {
-        const dateA = new Date(a.timestamp);
-        const dateB = new Date(b.timestamp);
-        return dateA - dateB;  // Ascending order (oldest first)
-    });
+    if (headers.includes('timestamp')) {
+        data.sort((a, b) => {
+            const dateA = new Date(a.timestamp);
+            const dateB = new Date(b.timestamp);
+            return dateA - dateB;  // Ascending order (oldest first)
+        });
+    }
 
     console.log('Parsed and sorted data:', data);  // Debug: verify parsing
     return data;
@@ -241,67 +245,283 @@ function createChart(canvasId, title, data, valueColumns, yAxisLabel) {
     }
 }
 
-// Function to create processing capacity chart
-function createProcessingChart(canvasId, title, data) {
+/**
+ * Create a line chart from prepared datasets with the standard time-series axes
+ *
+ * @param {string} canvasId - ID of the canvas element to render chart into
+ * @param {string} title - Chart title displayed at top
+ * @param {Array<Object>} datasets - Chart.js datasets with {x: Date, y: number} points
+ * @param {string} yAxisLabel - Label for Y-axis
+ * @returns {Chart} Chart.js chart instance
+ */
+function createTimeSeriesChart(canvasId, title, datasets, yAxisLabel) {
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    const themeColors = getThemeColors();
+
+    return new Chart(ctx, {
+        type: 'line',
+        data: { datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                title: {
+                    display: true,
+                    text: title,
+                    color: themeColors.text
+                },
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        color: themeColors.text
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    type: 'time',
+                    time: {
+                        unit: 'day',
+                        displayFormats: {
+                            day: 'MMM dd, yyyy'
+                        }
+                    },
+                    title: {
+                        display: true,
+                        text: 'Time',
+                        color: themeColors.text
+                    },
+                    ticks: {
+                        color: themeColors.text
+                    },
+                    grid: {
+                        color: themeColors.grid
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: yAxisLabel,
+                        color: themeColors.text
+                    },
+                    ticks: {
+                        color: themeColors.text
+                    },
+                    grid: {
+                        color: themeColors.grid
+                    }
+                }
+            }
+        }
+    });
+}
+
+/**
+ * Map a CSV column to {x, y} points, leaving gaps where the value is missing
+ */
+function columnPoints(data, column) {
+    return data.map(row => {
+        const value = parseFloat(row[column]);
+        return {
+            x: new Date(row.timestamp),
+            y: isFinite(value) ? value : null
+        };
+    });
+}
+
+/**
+ * Create Wait Time Chart
+ *
+ * Shows the estimated wait for a new request of each size at each snapshot alongside
+ * how long the newest request of that size filled in each batch actually waited.
+ *
+ * @param {string} canvasId - Canvas element ID
+ * @param {string} title - Chart title
+ * @param {Array<Object>} data - Time-series data
+ * @returns {Chart} Chart.js instance
+ */
+function createWaitTimeChart(canvasId, title, data) {
+    try {
+        const datasets = [];
+
+        Object.keys(colors).forEach(size => {
+            // Estimated wait for a new request of this size
+            datasets.push({
+                label: `Estimated ${size}`,
+                data: columnPoints(data, `estimated_wait_months_${size.slice(1)}`),
+                borderColor: colors[size],
+                backgroundColor: colors[size] + '20',
+                borderWidth: 3,
+                tension: 0.1
+            });
+
+            // Observed waits only change when a batch is filled, so draw them as steps
+            datasets.push({
+                label: `Last ${size} fill waited`,
+                data: columnPoints(data, `last_fill_wait_months_${size.slice(1)}`),
+                borderColor: colors[size],
+                backgroundColor: colors[size] + '20',
+                borderDash: [6, 4],
+                pointRadius: 0,
+                stepped: true
+            });
+        });
+
+        return createTimeSeriesChart(canvasId, title, datasets, 'Months');
+    } catch (error) {
+        console.error(`Error creating wait time chart ${canvasId}:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Create Time on Waitlist When Filled Chart
+ *
+ * For each issuance batch, the median wait of requests of each size that were filled,
+ * with the middle half (25th-75th percentile) shaded behind it.
+ *
+ * @param {string} canvasId - Canvas element ID
+ * @param {string} title - Chart title
+ * @param {Array<Object>} fillData - Rows from fills_by_batch.csv
+ * @returns {Chart} Chart.js instance
+ */
+function createFillWaitChart(canvasId, title, fillData) {
+    try {
+        const datasets = [];
+
+        Object.keys(colors).forEach(size => {
+            const rows = fillData.filter(row => row.size === size.slice(1));
+            const points = column => rows.map(row => ({
+                x: new Date(row.batch_date),
+                y: parseFloat(row[column]),
+                row
+            }));
+
+            // Middle half as a band: the 75th percentile line fills down to the 25th
+            datasets.push({
+                label: `${size} 25th percentile`,
+                data: points('wait_p25_months'),
+                borderColor: 'transparent',
+                pointRadius: 0,
+                pointHitRadius: 0,
+                tension: 0.1
+            });
+            datasets.push({
+                label: `${size} 75th percentile`,
+                data: points('wait_p75_months'),
+                borderColor: 'transparent',
+                backgroundColor: colors[size] + '30',
+                pointRadius: 0,
+                pointHitRadius: 0,
+                fill: '-1',
+                tension: 0.1
+            });
+            datasets.push({
+                label: `${size} median`,
+                data: points('wait_median_months'),
+                borderColor: colors[size],
+                backgroundColor: colors[size],
+                borderWidth: 2,
+                tension: 0.1
+            });
+        });
+
+        const chart = createTimeSeriesChart(canvasId, title, datasets, 'Months Waited');
+
+        // Show only the median lines in the legend and tooltips, with the batch details
+        chart.options.plugins.legend.labels.filter = item => item.text.endsWith('median');
+        chart.options.plugins.tooltip = {
+            filter: item => item.dataset.label.endsWith('median'),
+            callbacks: {
+                label: context => {
+                    const row = context.raw.row;
+                    return `${context.dataset.label}: ${row.wait_median_months} months ` +
+                        `(middle half ${row.wait_p25_months}–${row.wait_p75_months}, ${row.filled} filled)`;
+                }
+            }
+        };
+        chart.update();
+        return chart;
+    } catch (error) {
+        console.error(`Error creating fill wait chart ${canvasId}:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Create Waiting vs Issued Chart
+ *
+ * Compares address space waiting in line with the average issued per quarter.
+ * The ratio of the two is roughly how many quarterly batches it takes to clear the line.
+ *
+ * @param {string} canvasId - Canvas element ID
+ * @param {string} title - Chart title
+ * @param {Array<Object>} data - Time-series data
+ * @returns {Chart} Chart.js instance
+ */
+function createQueueSupplyChart(canvasId, title, data) {
+    try {
+        const datasets = [
+            {
+                label: 'Waiting',
+                data: columnPoints(data, 'queue_24eq'),
+                borderColor: colors['/22'],
+                backgroundColor: colors['/22'] + '20',
+                tension: 0.1
+            },
+            {
+                label: 'Issued per quarter (2-year average)',
+                data: columnPoints(data, 'supply_24eq_per_quarter'),
+                borderColor: colors['/24'],
+                backgroundColor: colors['/24'] + '20',
+                tension: 0.1
+            }
+        ];
+
+        return createTimeSeriesChart(canvasId, title, datasets, '/24 Equivalents');
+    } catch (error) {
+        console.error(`Error creating queue/supply chart ${canvasId}:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Create Address Space Issued Chart
+ *
+ * Stacked bar chart of address space ARIN issued to the waitlist each quarter,
+ * broken down by the size of block it came from.
+ *
+ * @param {string} canvasId - Canvas element ID
+ * @param {string} title - Chart title
+ * @param {Array<Object>} issuedData - Rows from issued_by_quarter.csv
+ * @returns {Chart} Chart.js instance
+ */
+function createIssuedChart(canvasId, title, issuedData) {
     try {
         const ctx = document.getElementById(canvasId).getContext('2d');
         const themeColors = getThemeColors();
 
-        // Calculate total processing capacity and individual components
-        const datasets = [];
-
-        // Individual block type datasets
-        Object.keys(colors).forEach(size => {
-            const column = {
-                '/22': 'avg_22_cleared_per_quarter',
-                '/23': 'avg_23_cleared_per_quarter',
-                '/24': 'avg_24_cleared_per_quarter'
-            }[size];
-
-            if (column) {
-                const chartData = data.map(row => {
-                    const value = parseFloat(row[column]) || 0;
-                    return {
-                        x: new Date(row.timestamp),
-                        y: value
-                    };
-                });
-
-                datasets.push({
-                    label: `${size} Blocks`,
-                    data: chartData,
-                    borderColor: colors[size],
-                    backgroundColor: colors[size] + '20',
-                    tension: 0.1
-                });
-            }
-        });
-
-        // Total processing capacity dataset
-        const totalData = data.map(row => {
-            const cleared22 = parseFloat(row.avg_22_cleared_per_quarter) || 0;
-            const cleared23 = parseFloat(row.avg_23_cleared_per_quarter) || 0;
-            const cleared24 = parseFloat(row.avg_24_cleared_per_quarter) || 0;
-            const total = cleared22 + cleared23 + cleared24;
-
-            return {
-                x: new Date(row.timestamp),
-                y: total
-            };
-        });
-
-        datasets.push({
-            label: 'Total Capacity',
-            data: totalData,
-            borderColor: '#ffa500',
-            backgroundColor: '#ffa500' + '20',
-            borderWidth: 3,
-            tension: 0.1
-        });
+        const sources = [
+            { label: 'From /21 and larger blocks', column: 'eq24_from_larger', color: '#ffa500' },
+            { label: 'From /22 blocks', column: 'eq24_from_22', color: colors['/22'] },
+            { label: 'From /23 blocks', column: 'eq24_from_23', color: colors['/23'] },
+            { label: 'From /24 blocks', column: 'eq24_from_24', color: colors['/24'] }
+        ];
 
         return new Chart(ctx, {
-            type: 'line',
-            data: { datasets },
+            type: 'bar',
+            data: {
+                labels: issuedData.map(row => row.quarter.replace('Q', ' Q')),  // '2026Q3' -> '2026 Q3'
+                datasets: sources.map(source => ({
+                    label: source.label,
+                    data: issuedData.map(row => parseInt(row[source.column]) || 0),
+                    backgroundColor: source.color + 'b3',
+                    borderColor: source.color,
+                    borderWidth: 1
+                }))
+            },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
@@ -313,7 +533,6 @@ function createProcessingChart(canvasId, title, data) {
                     },
                     legend: {
                         display: true,
-                        position: 'top',
                         labels: {
                             color: themeColors.text
                         }
@@ -321,16 +540,10 @@ function createProcessingChart(canvasId, title, data) {
                 },
                 scales: {
                     x: {
-                        type: 'time',
-                        time: {
-                            unit: 'day',
-                            displayFormats: {
-                                day: 'MMM dd, yyyy'
-                            }
-                        },
+                        stacked: true,
                         title: {
                             display: true,
-                            text: 'Time',
+                            text: 'Quarter',
                             color: themeColors.text
                         },
                         ticks: {
@@ -341,10 +554,11 @@ function createProcessingChart(canvasId, title, data) {
                         }
                     },
                     y: {
+                        stacked: true,
                         beginAtZero: true,
                         title: {
                             display: true,
-                            text: 'Entries Processed Per Quarter',
+                            text: '/24 Equivalents Issued',
                             color: themeColors.text
                         },
                         ticks: {
@@ -358,7 +572,7 @@ function createProcessingChart(canvasId, title, data) {
             }
         });
     } catch (error) {
-        console.error(`Error creating processing chart ${canvasId}:`, error);
+        console.error(`Error creating issued chart ${canvasId}:`, error);
         throw error;
     }
 }
@@ -369,11 +583,22 @@ function formatNumber(num) {
     return parseFloat(num).toLocaleString();
 }
 
-// Function to format years with 1 decimal place
-function formatYears(years) {
-    if (years === null || years === undefined || isNaN(years)) return '-';
-    if (years === Infinity) return '∞';
-    return parseFloat(years).toFixed(1);
+// Function to format months with 1 decimal place
+function formatMonths(months) {
+    if (months === null || months === undefined || isNaN(months)) return '-';
+    if (months === Infinity) return '∞';
+    return parseFloat(months).toFixed(1) + ' months';
+}
+
+// Function to format a YYYY-MM-DD date (dates are UTC, so format in UTC to avoid shifting a day)
+function formatDate(dateStr) {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        timeZone: 'UTC'
+    });
 }
 
 // Function to format percentages
@@ -396,7 +621,7 @@ function getTrendIndicator(current, previous, reverse = false) {
 
 // Function to calculate block efficiency (IPs per year wait time)
 function calculateBlockEfficiency(ips, waitYears) {
-    if (waitYears === 0 || waitYears === Infinity) return 0;
+    if (!isFinite(waitYears) || waitYears <= 0) return 0;
     return ips / waitYears;
 }
 
@@ -424,30 +649,26 @@ function updateStatistics(data) {
         const req24 = parseInt(latest.requests_24) || 0;
         const totalReq = parseInt(latest.total_requests) || 0;
 
-        // Wait times
-        const wait22 = parseFloat(latest.estimated_years_22) || 0;
-        const wait23 = parseFloat(latest.estimated_years_23) || 0;
-        const wait24 = parseFloat(latest.estimated_years_24) || 0;
+        // Estimated wait for a new request of each size (simulated future batches)
+        const estimatedWait22 = parseFloat(latest.estimated_wait_months_22);
+        const estimatedWait23 = parseFloat(latest.estimated_wait_months_23);
+        const estimatedWait24 = parseFloat(latest.estimated_wait_months_24);
+        const supply24eq = parseFloat(latest.supply_24eq_per_quarter) || 0;
 
-        // Clearing rates
-        const cleared22 = parseFloat(latest.avg_22_cleared_per_quarter) || 0;
-        const cleared23 = parseFloat(latest.avg_23_cleared_per_quarter) || 0;
-        const cleared24 = parseFloat(latest.avg_24_cleared_per_quarter) || 0;
+        // How long the newest request filled in the latest batch had waited, by size
+        const lastFillWait22 = parseFloat(latest.last_fill_wait_months_22);
+        const lastFillWait23 = parseFloat(latest.last_fill_wait_months_23);
+        const lastFillWait24 = parseFloat(latest.last_fill_wait_months_24);
 
         // Calculated statistics
         const total24Equiv = (req22 * 4) + (req23 * 2) + req24;
         const totalIPs = (req22 * 1024) + (req23 * 512) + (req24 * 256);
-        const totalCleared = cleared22 + cleared23 + cleared24;
-
-        // Weighted average wait time
         const totalRequests = req22 + req23 + req24;
-        const avgWait = totalRequests > 0 ?
-            ((wait22 * req22) + (wait23 * req23) + (wait24 * req24)) / totalRequests : 0;
 
-        // Block efficiency calculations (IPs per year)
-        const eff22 = calculateBlockEfficiency(1024, wait22);
-        const eff23 = calculateBlockEfficiency(512, wait23);
-        const eff24 = calculateBlockEfficiency(256, wait24);
+        // Block efficiency calculations (IPs per year of estimated wait)
+        const eff22 = calculateBlockEfficiency(1024, estimatedWait22 / 12);
+        const eff23 = calculateBlockEfficiency(512, estimatedWait23 / 12);
+        const eff24 = calculateBlockEfficiency(256, estimatedWait24 / 12);
 
         const efficiencies = [
             { type: '/22', efficiency: eff22, ips: 1024 },
@@ -483,20 +704,22 @@ function updateStatistics(data) {
             }
         }
 
-        // Clearing efficiency ratio (how well clearing keeps up with demand)
-        const totalClearedPerYear = totalCleared * 4; // quarters to years
+        // Supply vs new demand: address space issued per year compared with address
+        // space requested by new requests over the last year (both in /24 equivalents).
+        // Below 100% means the line grows and waits get longer.
+        const latestTime = new Date(latest.timestamp);
+        const yearAgo = latestTime - (1000 * 60 * 60 * 24 * 365.25);
+        const lastYearRows = data.slice(1).filter(row => new Date(row.timestamp) > yearAgo);
+        const added24eqLastYear = lastYearRows.reduce((sum, row) =>
+            sum + (parseInt(row.added_22) || 0) * 4 + (parseInt(row.added_23) || 0) * 2 + (parseInt(row.added_24) || 0), 0);
         let efficiencyRatio = 'No trend data';
-        if (netChangeRate !== 0 && totalClearedPerYear > 0) {
-            if (netChangeRate > 0) {
-                // Growing waitlist
-                const ratio = totalClearedPerYear / Math.abs(netChangeRate);
-                efficiencyRatio = `${(ratio * 100).toFixed(0)}% of growth`;
-            } else {
-                // Shrinking waitlist
-                efficiencyRatio = 'Clearing faster than growth';
-            }
-        } else if (netChangeRate <= 0) {
-            efficiencyRatio = 'Waitlist stable/shrinking';
+        if (lastYearRows.length > 0 && added24eqLastYear > 0) {
+            // Scale to a full year if the data covers less than that
+            const coveredYears = (latestTime - new Date(data[data.length - lastYearRows.length - 1].timestamp)) /
+                (1000 * 60 * 60 * 24 * 365.25);
+            const addedPerYear = added24eqLastYear / Math.min(Math.max(coveredYears, 0.01), 1);
+            const ratio = (supply24eq * 4) / addedPerYear;
+            efficiencyRatio = `${(ratio * 100).toFixed(0)}% of new demand`;
         }
 
         // Previous data for trends
@@ -522,17 +745,26 @@ function updateStatistics(data) {
         document.getElementById('current-24').textContent = formatNumber(req24);
         document.getElementById('total-requests').textContent = formatNumber(totalReq);
 
-        // Update wait times
-        document.getElementById('wait-22').textContent = formatYears(wait22) + ' years';
-        document.getElementById('wait-23').textContent = formatYears(wait23) + ' years';
-        document.getElementById('wait-24').textContent = formatYears(wait24) + ' years';
-        document.getElementById('avg-wait').textContent = formatYears(avgWait) + ' years';
+        // Update estimated wait
+        // Average across historical scenarios, with the typical (25th-75th percentile) range
+        [['22', estimatedWait22], ['23', estimatedWait23], ['24', estimatedWait24]].forEach(([size, waited]) => {
+            const low = parseFloat(latest[`estimated_wait_p25_months_${size}`]);
+            const high = parseFloat(latest[`estimated_wait_p75_months_${size}`]);
+            const range = isFinite(low) && isFinite(high) ? ` (${Math.round(low)}–${Math.round(high)})` : '';
+            document.getElementById(`estimated-wait-${size}`).textContent = formatMonths(waited) + range;
+        });
+        document.getElementById('supply-24eq').textContent = formatNumber(supply24eq);
 
-        // Update clearing rates
-        document.getElementById('cleared-22').textContent = formatNumber(cleared22);
-        document.getElementById('cleared-23').textContent = formatNumber(cleared23);
-        document.getElementById('cleared-24').textContent = formatNumber(cleared24);
-        document.getElementById('total-cleared').textContent = formatNumber(totalCleared);
+        // Update most recent fills (a size not filled in the latest batch shows its own batch date)
+        const lastFillDates = [latest.last_fill_date_22, latest.last_fill_date_23, latest.last_fill_date_24]
+            .filter(date => date).sort();
+        const latestBatch = lastFillDates[lastFillDates.length - 1];
+        [['22', lastFillWait22], ['23', lastFillWait23], ['24', lastFillWait24]].forEach(([size, waited]) => {
+            const date = latest[`last_fill_date_${size}`];
+            const suffix = date && date !== latestBatch ? ` (${formatDate(date)})` : '';
+            document.getElementById(`last-fill-${size}`).textContent = formatMonths(waited) + suffix;
+        });
+        document.getElementById('last-fill-date').textContent = formatDate(latestBatch);
 
         // Update network analysis
         document.getElementById('total-24-equiv').textContent = formatNumber(total24Equiv);
@@ -1222,7 +1454,7 @@ function updateLastUpdated(data) {
  * 1. Fetches the CSV file containing time-series data
  * 2. Parses the CSV into structured data
  * 3. Updates all statistics cards
- * 4. Creates all 9 charts
+ * 4. Creates all 10 charts
  * 5. Handles loading states and errors
  *
  * Called automatically when the DOM is ready.
@@ -1245,6 +1477,20 @@ async function loadData() {
             throw new Error('No data found in CSV file');
         }
 
+        // Load per-quarter issued space and per-batch fill waits (optional - only their
+        // charts are skipped if missing)
+        const loadOptionalCSV = async file => {
+            try {
+                const optionalResponse = await fetch(file);
+                return optionalResponse.ok ? parseCSV(await optionalResponse.text()) : [];
+            } catch (error) {
+                console.error(`Error loading ${file}:`, error);
+                return [];
+            }
+        };
+        const issuedData = await loadOptionalCSV('issued_by_quarter.csv');
+        const fillData = await loadOptionalCSV('fills_by_batch.csv');
+
         // === Update UI State ===
         // Hide loading spinner, show charts
         document.getElementById('loading').style.display = 'none';
@@ -1265,36 +1511,35 @@ async function loadData() {
             '/24': 'requests_24'
         }, 'Number of Requests');
 
-        // Chart 2: Historical Clearance Rate - Average blocks cleared per quarter
-        createChart('historicalChart', 'Historical Blocks Cleared Per Quarter', data, {
-            '/22': 'avg_22_cleared_per_quarter',
-            '/23': 'avg_23_cleared_per_quarter',
-            '/24': 'avg_24_cleared_per_quarter'
-        }, 'Blocks Per Quarter');
+        // Chart 2: Wait Time - Estimated wait vs how long recent fills actually waited
+        createWaitTimeChart('waitTimeChart', 'Estimated vs Observed Wait', data);
 
-        // Chart 3: Wait Time Estimates - How long current requests might wait
-        createChart('waitTimeChart', 'Estimated Wait Time', data, {
-            '/22': 'estimated_years_22',
-            '/23': 'estimated_years_23',
-            '/24': 'estimated_years_24'
-        }, 'Years');
+        // Chart 3: Time on Waitlist When Filled - Actual waits per batch and size
+        if (fillData.length > 0) {
+            createFillWaitChart('fillWaitChart', 'Time on Waitlist When Filled', fillData);
+        }
 
-        // Chart 4: Processing Capacity - Total blocks cleared (sum of all sizes)
-        createProcessingChart('processedChart', 'Total Processing Capacity Over Time', data);
+        // Chart 4: Address Space Issued - Supply per quarter by source block size
+        if (issuedData.length > 0) {
+            createIssuedChart('historicalChart', 'Address Space Issued Per Quarter', issuedData);
+        }
 
-        // Chart 5: Request Activity - Added vs removed requests (churn tracking)
+        // Chart 5: Waiting vs Issued - Queue size compared with average supply
+        createQueueSupplyChart('processedChart', 'Waiting vs Issued Per Quarter', data);
+
+        // Chart 6: Request Activity - Added vs removed requests (churn tracking)
         createActivityChart('activityChart', 'Request Activity Over Time', data);
 
-        // Chart 6: Efficiency Ratio - How effectively the waitlist is clearing (removed/added)
+        // Chart 7: Efficiency Ratio - How effectively the waitlist is clearing (removed/added)
         createEfficiencyRatioChart('efficiencyRatioChart', 'Clearing Efficiency Over Time', data);
 
-        // Chart 7: Block Size Competition - Net change by CIDR size
+        // Chart 8: Block Size Competition - Net change by CIDR size
         createBlockSizeCompetitionChart('blockSizeCompetitionChart', 'Net Change by Block Size', data);
 
-        // Chart 8: Flexibility Distribution - Pie chart: exact vs flexible requesters
+        // Chart 9: Flexibility Distribution - Pie chart: exact vs flexible requesters
         createFlexibilityDistributionChart('flexibilityDistributionChart', 'Request Flexibility Distribution', data);
 
-        // Chart 9: Age Distribution - Stacked bar chart showing request ages by CIDR size
+        // Chart 10: Age Distribution - Stacked bar chart showing request ages by CIDR size
         createAgeDistributionChart('ageDistributionChart', 'Current Request Age Distribution', data);
 
     } catch (error) {

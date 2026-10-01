@@ -67,6 +67,11 @@
             box-shadow: var(--shadow);
             transition: background-color 0.3s ease, box-shadow 0.3s ease;
         }
+        .chart-note {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin: 0;
+        }
         .chart-wrapper {
             position: relative;
             height: 400px;
@@ -218,42 +223,42 @@
             </div>
 
             <div class="stat-card">
-                <h3>Estimated Wait Times</h3>
+                <h3>Estimated Wait (Joining Now)</h3>
                 <div class="stat-item">
-                    <span class="stat-label">/22 networks:</span>
-                    <span class="stat-value" id="wait-22">- years</span>
+                    <span class="stat-label">/22 request:</span>
+                    <span class="stat-value" id="estimated-wait-22">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">/23 networks:</span>
-                    <span class="stat-value" id="wait-23">- years</span>
+                    <span class="stat-label">/23 request:</span>
+                    <span class="stat-value" id="estimated-wait-23">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">/24 networks:</span>
-                    <span class="stat-value" id="wait-24">- years</span>
+                    <span class="stat-label">/24 request:</span>
+                    <span class="stat-value" id="estimated-wait-24">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Average wait:</span>
-                    <span class="stat-value" id="avg-wait">- years</span>
+                    <span class="stat-label">Issued per quarter (/24 eq, 2-yr avg):</span>
+                    <span class="stat-value" id="supply-24eq">-</span>
                 </div>
             </div>
 
             <div class="stat-card">
-                <h3>Clearing Rates</h3>
+                <h3>Most Recent Fills</h3>
                 <div class="stat-item">
-                    <span class="stat-label">/22 per quarter:</span>
-                    <span class="stat-value" id="cleared-22">-</span>
+                    <span class="stat-label">/22 last filled after:</span>
+                    <span class="stat-value" id="last-fill-22">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">/23 per quarter:</span>
-                    <span class="stat-value" id="cleared-23">-</span>
+                    <span class="stat-label">/23 last filled after:</span>
+                    <span class="stat-value" id="last-fill-23">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">/24 per quarter:</span>
-                    <span class="stat-value" id="cleared-24">-</span>
+                    <span class="stat-label">/24 last filled after:</span>
+                    <span class="stat-value" id="last-fill-24">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Total per quarter:</span>
-                    <span class="stat-value" id="total-cleared">-</span>
+                    <span class="stat-label">Latest batch:</span>
+                    <span class="stat-value" id="last-fill-date">-</span>
                 </div>
             </div>
 
@@ -312,7 +317,7 @@
                     <span class="stat-value" id="net-change">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Clearing efficiency:</span>
+                    <span class="stat-label">Supply vs new demand:</span>
                     <span class="stat-value" id="clearing-efficiency">-</span>
                 </div>
             </div>
@@ -377,21 +382,45 @@
         </div>
 
         <div class="chart-container">
-            <h2>Historical Blocks Cleared Per Quarter</h2>
-            <div class="chart-wrapper">
-                <canvas id="historicalChart"></canvas>
-            </div>
-        </div>
-
-        <div class="chart-container">
-            <h2>Estimated Wait Time (Years)</h2>
+            <h2>Wait Time (Months)</h2>
+            <p class="chart-note">
+                Requests are filled first-come-first-served in roughly quarterly batches, but only
+                when a block of the right size is available (several /24s can't be combined into a /22).
+                Estimates (solid) simulate future batches by replaying ARIN's issuance history since 2020
+                against the current line, starting from each past quarter in turn; the cards show the average
+                and the typical (25th&ndash;75th percentile) range. Dashed steps show how long the newest
+                request filled in each batch actually waited.
+            </p>
             <div class="chart-wrapper">
                 <canvas id="waitTimeChart"></canvas>
             </div>
         </div>
 
         <div class="chart-container">
-            <h2>Total Processing Capacity Over Time</h2>
+            <h2>Time on Waitlist When Filled</h2>
+            <p class="chart-note">
+                How long requests actually waited, for each issuance batch: the median wait of requests
+                of each size filled in that batch, with the middle half shaded. Before September 2025 snapshots
+                were months apart, so which batch filled each request is reconstructed by simulation.
+            </p>
+            <div class="chart-wrapper">
+                <canvas id="fillWaitChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Address Space Issued Per Quarter</h2>
+            <p class="chart-note">
+                Measured in /24 equivalents (/22 = 4, /16 = 256). Larger blocks are split
+                to fill many /22&ndash;/24 requests, so they make up most of the supply.
+            </p>
+            <div class="chart-wrapper">
+                <canvas id="historicalChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Waiting vs Issued</h2>
             <div class="chart-wrapper">
                 <canvas id="processedChart"></canvas>
             </div>

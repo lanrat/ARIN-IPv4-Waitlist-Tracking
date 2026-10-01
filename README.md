@@ -1,6 +1,6 @@
 # ARIN IPv4 Waitlist Analyzer
 
-Analyzes ARIN's IPv4 waiting list and estimates wait times based on historical clearing data.
+Analyzes ARIN's IPv4 waiting list and estimates wait times based on the address space ARIN has issued to it.
 
 **[View Live Dashboard](https://lanrat.github.io/ARIN-IPv4-Waitlist-Tracking/)**
 
@@ -12,17 +12,19 @@ Analyzes ARIN's IPv4 waiting list and estimates wait times based on historical c
 ## Features
 
 - **Waitlist Tracking**: Fetches current waitlist data from ARIN's public API
-- **Historical Analysis**: Analyzes historical block clearing patterns to estimate wait times
+- **Wait Time Estimates**: Estimates the wait for a new /22, /23 or /24 request by simulating how ARIN fills the line with the blocks it issues
+- **Observed Waits**: Detects each issuance batch and records how long the most recently filled requests actually waited
 - **Request Churn Tracking**: Monitors added/removed requests between snapshots
 - **Flexibility Analysis**: Tracks how many requesters are willing to accept different block sizes
 - **Age Distribution**: Analyzes how long requests have been waiting, broken down by CIDR size
 - **Git History Integration**: Uses git commits to track waitlist changes over time
-- **Time-Series Data**: Exports comprehensive CSV data (38 columns) for analysis
-- **Interactive Dashboard**: Web-based visualizations with 9 charts:
+- **Time-Series Data**: Exports comprehensive CSV data (49 columns) for analysis
+- **Interactive Dashboard**: Web-based visualizations with 10 charts:
   - Waitlist size over time
-  - Historical blocks cleared per quarter
-  - Estimated wait time (years)
-  - Total processing capacity over time
+  - Estimated vs observed wait time (months)
+  - Time on waitlist when filled, per batch and block size
+  - Address space issued per quarter
+  - Address space waiting vs issued
   - Request activity (added vs removed)
   - Efficiency ratio (removed/added)
   - Block size net change competition
@@ -61,11 +63,48 @@ python process.py --file data/historical/snapshot.json --csv
 python process.py --reprocess-history --output-csv docs/waitlist_data.csv
 ```
 
+## How Wait Times Are Estimated
+
+ARIN fills the waitlist first-come-first-served (by `waitListActionDate`) in roughly quarterly batches,
+["subject to the size of each available address block"](https://www.arin.net/participate/policy/nrpm/#4-1-8-2-fulfillment),
+and never partially. A /22 request needs a block that can hold a /22; several /24 blocks can't be combined.
+ARIN's [issued blocks list](https://www.arin.net/resources/guide/ipv4/blocks_cleared/) includes large
+blocks (/15–/21) that are split to fill many /22–/24 requests, so the model works from the actual blocks
+issued rather than counting /22–/24 rows.
+
+- **Estimated wait (joining now)**, per size: the blocks ARIN issued in every quarter since its list
+  begins in 2020 (quarters with no issuance count as empty) are replayed as future quarterly batches over
+  the current line. Each simulated batch fills requests in line order, giving each the largest size it
+  accepts that a remaining block can hold (splitting larger blocks) and skipping requests nothing fits.
+  A new request at the back of the line is filled in the first batch with a suitable block left over.
+  The replay starts from each past quarter in turn; the dashboard shows the average wait and the typical
+  (25th–75th percentile) range across those scenarios. Replaying all history rather than recent quarters
+  keeps one unusual batch (like October 2025's 1,471 /24 equivalents, or July 2026's 177 /24 blocks)
+  from dominating; backtested against actual waits it was the most accurate window tried.
+  On the 2025–2026 batches this simulation reproduces 85–99% of the requests ARIN actually filled,
+  including the July 2026 batch where mostly-/24 blocks let /24 requests jump months ahead of /22s.
+- **Time on waitlist when filled** = for each batch and block size, how long the requests that were
+  filled had waited (median and middle half). Removed requests up to the newest one served count as
+  filled; later removals are withdrawals. Where snapshots are months apart (before September 2025) and
+  span several batches, the simulation above decides which batch reached each request.
+- **Most recent fills** = for each block size, how long the newest request filled in the latest batch
+  had waited. Batches are detected from snapshot diffs (10+ removals); a request counts as filled when
+  at least 8 of the 10 same-size requests up to it in line were removed, which ignores withdrawals and
+  requests stuck at the front of the line.
+
+The estimate assumes future batches look like past ones, and batches vary a lot (0 to 1,471 /24
+equivalents per quarter, sometimes mostly /24 blocks), so treat it as a rough guide, look at the range,
+and compare it with the observed waits. Requests that ARIN skips for review stay in the simulated line, so estimates
+lean slightly long.
+
 ## Output Files
 
-- `docs/waitlist_data.csv` - Time-series data for dashboard (38 columns including counts, churn, flexibility, age distribution)
+- `docs/waitlist_data.csv` - Time-series data for dashboard (49 columns including counts, churn, flexibility, age distribution, wait times)
+- `docs/issued_by_quarter.csv` - Address space issued per quarter by source block size
+- `docs/fills_by_batch.csv` - How long filled requests waited, per issuance batch and block size
+- `data/fills.csv` - Every request counted as filled, with when it joined and was filled (appended each run)
 - `data/waitlist_data.json` - Current waitlist snapshot (tracked in git)
-- `data/historical_data.csv` - Historical clearing data (cached from ARIN)
+- `data/historical_data.csv` - Historical issued blocks data (cached from ARIN)
 
 ## Dashboard
 
@@ -76,19 +115,20 @@ Open `docs/index.html` in a web browser or visit the [Live Dashboard](https://la
 - Total requests by CIDR size (/22, /23, /24)
 - Recent activity (requests added/removed)
 - Flexibility metrics (exact vs flexible requesters)
-- Average wait times and queue ages
+- Estimated wait for a new request and observed waits of the most recent fills
 
 ### Interactive Charts
 
 1. **Current Waitlist Size** - Track total requests and breakdown by block size over time
-2. **Historical Blocks Cleared Per Quarter** - Average processing rate by block size
-3. **Estimated Wait Time** - Projected years to clear current queue by block size
-4. **Total Processing Capacity Over Time** - Combined clearing capacity across all sizes
-5. **Request Activity** - Compare added vs removed requests over time
-6. **Efficiency Ratio** - Monitor removed/added ratio with break-even line at 1.0
-7. **Block Size Net Change Competition** - Net change by CIDR size (/22, /23, /24)
-8. **Request Flexibility Distribution** - Pie chart of exact vs flexible requests
-9. **Current Request Age Distribution** - Stacked bar chart showing age ranges by block size
+2. **Wait Time** - Estimated wait for a new request vs how long recently filled requests actually waited
+3. **Time on Waitlist When Filled** - Median wait (and middle half) of requests filled in each batch, by block size
+4. **Address Space Issued Per Quarter** - Supply by quarter, broken down by source block size
+5. **Waiting vs Issued** - /24 equivalents waiting compared with the average issued per quarter
+6. **Request Activity** - Compare added vs removed requests over time
+7. **Efficiency Ratio** - Monitor removed/added ratio with break-even line at 1.0
+8. **Block Size Net Change Competition** - Net change by CIDR size (/22, /23, /24)
+9. **Request Flexibility Distribution** - Pie chart of exact vs flexible requests
+10. **Current Request Age Distribution** - Stacked bar chart showing age ranges by block size
 
 ## Automation
 
@@ -104,14 +144,14 @@ Manual runs available via workflow dispatch.
 
 ## Data Columns
 
-The CSV file contains 38 columns tracking:
+The CSV file contains 49 columns tracking:
 
 - **Basic Counts**: Total requests and breakdown by CIDR size (/22, /23, /24)
 - **Churn Metrics**: Added/removed requests by size, net change
 - **Flexibility**: Exact vs flexible requests, average flexibility
 - **Age by Size**: Age distribution broken down by CIDR size across 5 age ranges (0-3mo, 3-6mo, 6-12mo, 12-24mo, 24+mo)
-- **Processing Rates**: Average blocks cleared per quarter by size
-- **Wait Time Estimates**: Estimated years to clear queue by size
+- **Supply and Queue**: /24 equivalents waiting and average /24 equivalents issued per quarter
+- **Wait Times**: Estimated wait (months) for a new request of each size with its 25th–75th percentile range, and the date and wait of the most recent fill by size
 
 ## Requirements
 
