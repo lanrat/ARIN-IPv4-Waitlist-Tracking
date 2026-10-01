@@ -19,9 +19,10 @@ Analyzes ARIN's IPv4 waiting list and estimates wait times based on the address 
 - **Age Distribution**: Analyzes how long requests have been waiting, broken down by CIDR size
 - **Git History Integration**: Uses git commits to track waitlist changes over time
 - **Time-Series Data**: Exports comprehensive CSV data (49 columns) for analysis
-- **Interactive Dashboard**: Web-based visualizations with 9 charts:
+- **Interactive Dashboard**: Web-based visualizations with 10 charts:
   - Waitlist size over time
   - Estimated vs observed wait time (months)
+  - Time on waitlist when filled, per batch and block size
   - Address space issued per quarter
   - Address space waiting vs issued
   - Request activity (added vs removed)
@@ -82,6 +83,10 @@ issued rather than counting /22–/24 rows.
   from dominating; backtested against actual waits it was the most accurate window tried.
   On the 2025–2026 batches this simulation reproduces 85–99% of the requests ARIN actually filled,
   including the July 2026 batch where mostly-/24 blocks let /24 requests jump months ahead of /22s.
+- **Time on waitlist when filled** = for each batch and block size, how long the requests that were
+  filled had waited (median and middle half). Removed requests up to the newest one served count as
+  filled; later removals are withdrawals. Where snapshots are months apart (before September 2025) and
+  span several batches, the simulation above decides which batch reached each request.
 - **Most recent fills** = for each block size, how long the newest request filled in the latest batch
   had waited. Batches are detected from snapshot diffs (10+ removals); a request counts as filled when
   at least 8 of the 10 same-size requests up to it in line were removed, which ignores withdrawals and
@@ -96,6 +101,8 @@ lean slightly long.
 
 - `docs/waitlist_data.csv` - Time-series data for dashboard (49 columns including counts, churn, flexibility, age distribution, wait times)
 - `docs/issued_by_quarter.csv` - Address space issued per quarter by source block size
+- `docs/fills_by_batch.csv` - How long filled requests waited, per issuance batch and block size
+- `data/fills.csv` - Every request counted as filled, with when it joined and was filled (appended each run)
 - `data/waitlist_data.json` - Current waitlist snapshot (tracked in git)
 - `data/historical_data.csv` - Historical issued blocks data (cached from ARIN)
 
@@ -114,13 +121,14 @@ Open `docs/index.html` in a web browser or visit the [Live Dashboard](https://la
 
 1. **Current Waitlist Size** - Track total requests and breakdown by block size over time
 2. **Wait Time** - Estimated wait for a new request vs how long recently filled requests actually waited
-3. **Address Space Issued Per Quarter** - Supply by quarter, broken down by source block size
-4. **Waiting vs Issued** - /24 equivalents waiting compared with the average issued per quarter
-5. **Request Activity** - Compare added vs removed requests over time
-6. **Efficiency Ratio** - Monitor removed/added ratio with break-even line at 1.0
-7. **Block Size Net Change Competition** - Net change by CIDR size (/22, /23, /24)
-8. **Request Flexibility Distribution** - Pie chart of exact vs flexible requests
-9. **Current Request Age Distribution** - Stacked bar chart showing age ranges by block size
+3. **Time on Waitlist When Filled** - Median wait (and middle half) of requests filled in each batch, by block size
+4. **Address Space Issued Per Quarter** - Supply by quarter, broken down by source block size
+5. **Waiting vs Issued** - /24 equivalents waiting compared with the average issued per quarter
+6. **Request Activity** - Compare added vs removed requests over time
+7. **Efficiency Ratio** - Monitor removed/added ratio with break-even line at 1.0
+8. **Block Size Net Change Competition** - Net change by CIDR size (/22, /23, /24)
+9. **Request Flexibility Distribution** - Pie chart of exact vs flexible requests
+10. **Current Request Age Distribution** - Stacked bar chart showing age ranges by block size
 
 ## Automation
 

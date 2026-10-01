@@ -14,6 +14,7 @@
  *
  * Data Sources: docs/waitlist_data.csv (time-series, one row per snapshot)
  *               docs/issued_by_quarter.csv (address space ARIN issued per quarter)
+ *               docs/fills_by_batch.csv (how long filled requests waited, per batch and size)
  * Chart Library: Chart.js with Time and Adapter-Date-Fns plugins
  */
 
@@ -371,6 +372,80 @@ function createWaitTimeChart(canvasId, title, data) {
         return createTimeSeriesChart(canvasId, title, datasets, 'Months');
     } catch (error) {
         console.error(`Error creating wait time chart ${canvasId}:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Create Time on Waitlist When Filled Chart
+ *
+ * For each issuance batch, the median wait of requests of each size that were filled,
+ * with the middle half (25th-75th percentile) shaded behind it.
+ *
+ * @param {string} canvasId - Canvas element ID
+ * @param {string} title - Chart title
+ * @param {Array<Object>} fillData - Rows from fills_by_batch.csv
+ * @returns {Chart} Chart.js instance
+ */
+function createFillWaitChart(canvasId, title, fillData) {
+    try {
+        const datasets = [];
+
+        Object.keys(colors).forEach(size => {
+            const rows = fillData.filter(row => row.size === size.slice(1));
+            const points = column => rows.map(row => ({
+                x: new Date(row.batch_date),
+                y: parseFloat(row[column]),
+                row
+            }));
+
+            // Middle half as a band: the 75th percentile line fills down to the 25th
+            datasets.push({
+                label: `${size} 25th percentile`,
+                data: points('wait_p25_months'),
+                borderColor: 'transparent',
+                pointRadius: 0,
+                pointHitRadius: 0,
+                tension: 0.1
+            });
+            datasets.push({
+                label: `${size} 75th percentile`,
+                data: points('wait_p75_months'),
+                borderColor: 'transparent',
+                backgroundColor: colors[size] + '30',
+                pointRadius: 0,
+                pointHitRadius: 0,
+                fill: '-1',
+                tension: 0.1
+            });
+            datasets.push({
+                label: `${size} median`,
+                data: points('wait_median_months'),
+                borderColor: colors[size],
+                backgroundColor: colors[size],
+                borderWidth: 2,
+                tension: 0.1
+            });
+        });
+
+        const chart = createTimeSeriesChart(canvasId, title, datasets, 'Months Waited');
+
+        // Show only the median lines in the legend and tooltips, with the batch details
+        chart.options.plugins.legend.labels.filter = item => item.text.endsWith('median');
+        chart.options.plugins.tooltip = {
+            filter: item => item.dataset.label.endsWith('median'),
+            callbacks: {
+                label: context => {
+                    const row = context.raw.row;
+                    return `${context.dataset.label}: ${row.wait_median_months} months ` +
+                        `(middle half ${row.wait_p25_months}–${row.wait_p75_months}, ${row.filled} filled)`;
+                }
+            }
+        };
+        chart.update();
+        return chart;
+    } catch (error) {
+        console.error(`Error creating fill wait chart ${canvasId}:`, error);
         throw error;
     }
 }
@@ -1379,7 +1454,7 @@ function updateLastUpdated(data) {
  * 1. Fetches the CSV file containing time-series data
  * 2. Parses the CSV into structured data
  * 3. Updates all statistics cards
- * 4. Creates all 9 charts
+ * 4. Creates all 10 charts
  * 5. Handles loading states and errors
  *
  * Called automatically when the DOM is ready.
@@ -1402,16 +1477,19 @@ async function loadData() {
             throw new Error('No data found in CSV file');
         }
 
-        // Load per-quarter issued space (optional - only its chart is skipped if missing)
-        let issuedData = [];
-        try {
-            const issuedResponse = await fetch('issued_by_quarter.csv');
-            if (issuedResponse.ok) {
-                issuedData = parseCSV(await issuedResponse.text());
+        // Load per-quarter issued space and per-batch fill waits (optional - only their
+        // charts are skipped if missing)
+        const loadOptionalCSV = async file => {
+            try {
+                const optionalResponse = await fetch(file);
+                return optionalResponse.ok ? parseCSV(await optionalResponse.text()) : [];
+            } catch (error) {
+                console.error(`Error loading ${file}:`, error);
+                return [];
             }
-        } catch (error) {
-            console.error('Error loading issued_by_quarter.csv:', error);
-        }
+        };
+        const issuedData = await loadOptionalCSV('issued_by_quarter.csv');
+        const fillData = await loadOptionalCSV('fills_by_batch.csv');
 
         // === Update UI State ===
         // Hide loading spinner, show charts
@@ -1436,27 +1514,32 @@ async function loadData() {
         // Chart 2: Wait Time - Estimated wait vs how long recent fills actually waited
         createWaitTimeChart('waitTimeChart', 'Estimated vs Observed Wait', data);
 
-        // Chart 3: Address Space Issued - Supply per quarter by source block size
+        // Chart 3: Time on Waitlist When Filled - Actual waits per batch and size
+        if (fillData.length > 0) {
+            createFillWaitChart('fillWaitChart', 'Time on Waitlist When Filled', fillData);
+        }
+
+        // Chart 4: Address Space Issued - Supply per quarter by source block size
         if (issuedData.length > 0) {
             createIssuedChart('historicalChart', 'Address Space Issued Per Quarter', issuedData);
         }
 
-        // Chart 4: Waiting vs Issued - Queue size compared with average supply
+        // Chart 5: Waiting vs Issued - Queue size compared with average supply
         createQueueSupplyChart('processedChart', 'Waiting vs Issued Per Quarter', data);
 
-        // Chart 5: Request Activity - Added vs removed requests (churn tracking)
+        // Chart 6: Request Activity - Added vs removed requests (churn tracking)
         createActivityChart('activityChart', 'Request Activity Over Time', data);
 
-        // Chart 6: Efficiency Ratio - How effectively the waitlist is clearing (removed/added)
+        // Chart 7: Efficiency Ratio - How effectively the waitlist is clearing (removed/added)
         createEfficiencyRatioChart('efficiencyRatioChart', 'Clearing Efficiency Over Time', data);
 
-        // Chart 7: Block Size Competition - Net change by CIDR size
+        // Chart 8: Block Size Competition - Net change by CIDR size
         createBlockSizeCompetitionChart('blockSizeCompetitionChart', 'Net Change by Block Size', data);
 
-        // Chart 8: Flexibility Distribution - Pie chart: exact vs flexible requesters
+        // Chart 9: Flexibility Distribution - Pie chart: exact vs flexible requesters
         createFlexibilityDistributionChart('flexibilityDistributionChart', 'Request Flexibility Distribution', data);
 
-        // Chart 9: Age Distribution - Stacked bar chart showing request ages by CIDR size
+        // Chart 10: Age Distribution - Stacked bar chart showing request ages by CIDR size
         createAgeDistributionChart('ageDistributionChart', 'Current Request Age Distribution', data);
 
     } catch (error) {

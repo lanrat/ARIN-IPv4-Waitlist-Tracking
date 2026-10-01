@@ -69,6 +69,13 @@ SERVED_WINDOW = 10
 SERVED_WINDOW_SHARE = 0.8
 # Block sizes that can be requested from the waitlist
 SIZES = (22, 23, 24)
+# Fills less than this many days apart belong to the same batch (ARIN can take a couple
+# of weeks to work through one, so a batch can span several snapshots)
+BATCH_GROUP_DAYS = 30
+
+# Log of every request counted as filled (tracked in git, appended in live mode)
+FILL_LOG_FILE = 'data/fills.csv'
+FILL_LOG_HEADER = ['joined', 'filled', 'maximum_cidr', 'minimum_cidr', 'wait_months']
 
 # Old snapshots converted from ARIN's HTML page carry a bogus local mean time offset
 # (-04:56) on what were US/Eastern wall-clock times
@@ -471,8 +478,11 @@ def detect_filled_requests(current_data, previous_data, snapshot_time, previous_
 
     ARIN fills the waitlist in order of waitListActionDate, so a batch removes a run of
     the oldest requests. For each block size this finds the newest request that was
-    served (most of the same-size requests just ahead of it were removed too) and
-    reports how long it had waited.
+    served (most of the same-size requests just ahead of it were removed too). Removed
+    requests that joined on or before it count as filled; newer removals are withdrawals.
+
+    Snapshots taken far apart can span several of ARIN's batches. Those batches are then
+    replayed with allocate_blocks() to work out which batch reached each filled request.
 
     Args:
         current_data (list): Current waitlist snapshot (normalized)
@@ -482,32 +492,33 @@ def detect_filled_requests(current_data, previous_data, snapshot_time, previous_
         issued_df (DataFrame): Parsed issued blocks, used to date the batch
 
     Returns:
-        tuple: (fill_time, waits)
-            - fill_time: When the batch was issued (ARIN's batch date when published,
-              otherwise the snapshot time), or None if no batch was detected
-            - waits: Dict of months waited by the newest served request {22: 10.0, ...};
-              sizes with no served requests are omitted
+        tuple: (waits, fills)
+            - waits: Dict of (fill time, months waited) for the newest served request of
+              each size {22: (datetime, 10.0), ...}; sizes with no served requests are omitted
+            - fills: List of (request, fill time) for every request counted as filled.
+              The fill time is ARIN's batch date when published, otherwise the snapshot time.
     """
     if not previous_data:
-        return None, {}
+        return {}, []
 
     current_keys = {request_key(item) for item in current_data}
     removed_keys = {request_key(item) for item in previous_data} - current_keys
 
     # A few removals between batches are withdrawals, not fills
     if len(removed_keys) < BATCH_MIN_REMOVALS:
-        return None, {}
+        return {}, []
 
-    # Use ARIN's batch date when it has been published; removals can lag the batch
+    # Use ARIN's batch dates when they have been published; removals can lag the batch
     # date by a few days, so allow a little slack before the previous snapshot
-    fill_time = snapshot_time
+    batch_dates = []
     if previous_time is not None:
-        batch_dates = issued_df[(issued_df['Date Reissued'] > to_naive_utc(previous_time - timedelta(days=3))) &
-                                (issued_df['Date Reissued'] <= to_naive_utc(snapshot_time))]['Date Reissued']
-        if not batch_dates.empty:
-            fill_time = batch_dates.max().to_pydatetime().replace(tzinfo=timezone.utc)
+        in_window = issued_df[(issued_df['Date Reissued'] > to_naive_utc(previous_time - timedelta(days=3))) &
+                              (issued_df['Date Reissued'] <= to_naive_utc(snapshot_time))]['Date Reissued']
+        batch_dates = sorted(in_window.unique())
+    fill_time = pd.Timestamp(batch_dates[-1]).to_pydatetime().replace(tzinfo=timezone.utc) if batch_dates else snapshot_time
 
-    waits = {}
+    filled = []
+    served_by_size = {}
     for size in SIZES:
         # Same-size requests in line order (canonical timestamps sort chronologically)
         queue = sorted((item for item in previous_data if item['maximumCidr'] == size),
@@ -523,10 +534,30 @@ def detect_filled_requests(current_data, previous_data, snapshot_time, previous_
                     served = item
 
         if served:
-            waited = fill_time - parse_timestamp(served['waitListActionDate'])
-            waits[size] = max(waited.total_seconds(), 0) / 86400 / DAYS_PER_MONTH
+            served_by_size[size] = served
+            filled += [item for item, removed in zip(queue, removed_flags)
+                       if removed and item['waitListActionDate'] <= served['waitListActionDate']]
 
-    return fill_time, waits
+    # Date each fill: replay earlier batches in the window to see which one reached it;
+    # anything not reached by them was filled in the last batch
+    fill_times = {request_key(item): fill_time for item in filled}
+    remaining = sorted(previous_data, key=lambda item: item['waitListActionDate'])
+    for batch_date in batch_dates[:-1]:
+        blocks = issued_df.loc[issued_df['Date Reissued'] == batch_date, 'Prefix Size'].tolist()
+        simulated, _ = allocate_blocks(remaining, blocks)
+        for key in simulated & fill_times.keys():
+            fill_times[key] = pd.Timestamp(batch_date).to_pydatetime().replace(tzinfo=timezone.utc)
+        remaining = [item for item in remaining if request_key(item) not in simulated]
+
+    def months_waited(item):
+        waited = fill_times[request_key(item)] - parse_timestamp(item['waitListActionDate'])
+        return max(waited.total_seconds(), 0) / 86400 / DAYS_PER_MONTH
+
+    waits = {size: (fill_times[request_key(served)], months_waited(served))
+             for size, served in served_by_size.items()}
+    fills = [(item, fill_times[request_key(item)]) for item in filled]
+
+    return waits, fills
 
 def compare_waitlists(current_data, previous_data):
     """
@@ -731,9 +762,9 @@ def calculate_age_distribution(waitlist_data, reference_time=None):
             age_days = (reference_time - action_date).days
             ages_days.append(age_days)
 
-            # Determine CIDR size for this request (use minimumCidr as identifier)
-            min_cidr = item.get('minimumCidr')
-            cidr_key = str(min_cidr) if min_cidr in [22, 23, 24] else None
+            # Determine CIDR size for this request (maximumCidr, like the request counts)
+            max_cidr = item.get('maximumCidr')
+            cidr_key = str(max_cidr) if max_cidr in [22, 23, 24] else None
 
             # Convert days to months using average days per month (365.25/12)
             age_months = age_days / DAYS_PER_MONTH
@@ -794,7 +825,10 @@ def analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, pre
             previous snapshot time and carries last-fill values forward between batches.
 
     Returns:
-        dict: Metrics keyed by CSV_HEADER column names (values formatted for CSV output)
+        tuple: (row, fills)
+            - row: Metrics keyed by CSV_HEADER column names (values formatted for CSV output)
+            - fills: (request, fill time) for requests filled since the previous snapshot,
+              from detect_filled_requests()
     """
     # === Churn and Flexibility ===
     # Compare current vs previous to calculate churn and flexibility metrics
@@ -808,14 +842,15 @@ def analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, pre
 
     # === Most Recent Fills (observed) ===
     previous_time = parse_timestamp(previous_row['timestamp']) if previous_row and previous_row.get('timestamp') else None
-    fill_time, fill_waits = detect_filled_requests(waitlist_data, previous_data, snapshot_time, previous_time, issued_df)
+    fill_waits, fills = detect_filled_requests(waitlist_data, previous_data, snapshot_time, previous_time, issued_df)
 
     # Carry the last observed fills forward until the next batch that fills that size
     previous_row = previous_row or {}
     last_fills = {}
     for size in SIZES:
         if size in fill_waits:
-            last_fills[size] = (fill_time.date().isoformat(), f'{fill_waits[size]:.1f}')
+            served_time, waited = fill_waits[size]
+            last_fills[size] = (served_time.date().isoformat(), f'{waited:.1f}')
         else:
             last_fills[size] = (previous_row.get(f'last_fill_date_{size}', ''),
                                 previous_row.get(f'last_fill_wait_months_{size}', ''))
@@ -863,7 +898,7 @@ def analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, pre
             row[f'{column}_{size}'] = f'{waited:.1f}' if waited != float('inf') else 'inf'
         row[f'last_fill_date_{size}'], row[f'last_fill_wait_months_{size}'] = last_fills[size]
 
-    return row
+    return row, fills
 
 def load_last_csv_row(csv_path):
     """
@@ -913,6 +948,83 @@ def write_issued_by_quarter(issued_df, output_file):
                 int(eq24.get(22, 0)),
                 int(eq24[eq24.index < 22].sum())  # /21 and larger, split to fill requests
             ])
+
+def fill_log_rows(fills):
+    """
+    Convert (request, fill time) pairs from detect_filled_requests() to fill log rows.
+    """
+    rows = []
+    for item, fill_time in fills:
+        waited = fill_time - parse_timestamp(item['waitListActionDate'])
+        rows.append({
+            'joined': item['waitListActionDate'],
+            'filled': fill_time.date().isoformat(),
+            'maximum_cidr': item['maximumCidr'],
+            'minimum_cidr': item['minimumCidr'] or item['maximumCidr'],
+            'wait_months': f'{max(waited.total_seconds(), 0) / 86400 / DAYS_PER_MONTH:.1f}'
+        })
+    return rows
+
+def load_fill_log(path=FILL_LOG_FILE):
+    """Load the fill log, or an empty list if it doesn't exist yet."""
+    try:
+        with open(path, 'r', encoding='utf-8', newline='') as f:
+            return list(csv.DictReader(f))
+    except FileNotFoundError:
+        return []
+
+def write_fill_log(rows, path=FILL_LOG_FILE):
+    """
+    Write the fill log sorted by fill date, keeping the first fill seen for each request.
+    """
+    unique = {}
+    for row in rows:
+        unique.setdefault(request_key({'waitListActionDate': row['joined']}), row)
+
+    with open(path, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=FILL_LOG_HEADER)
+        writer.writeheader()
+        writer.writerows(sorted(unique.values(), key=lambda row: (row['filled'], row['joined'])))
+
+def write_fills_by_batch(rows, output_file):
+    """
+    Summarize how long filled requests waited, per issuance batch and block size.
+
+    Fills less than BATCH_GROUP_DAYS apart are grouped into one batch, which is dated by
+    its last fill (ARIN's published batch date when known).
+
+    Args:
+        rows (list): Fill log rows (see FILL_LOG_HEADER)
+        output_file (str): Path to output CSV (e.g., 'docs/fills_by_batch.csv')
+    """
+    batches = []
+    for row in sorted(rows, key=lambda row: row['filled']):
+        filled = datetime.fromisoformat(row['filled'])
+        if not batches or (filled - batches[-1]['start']).days > BATCH_GROUP_DAYS:
+            batches.append({'start': filled, 'rows': []})
+        batches[-1]['end'] = row['filled']
+        batches[-1]['rows'].append(row)
+
+    with open(output_file, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['batch_date', 'size', 'filled', 'wait_median_months', 'wait_p25_months',
+                         'wait_p75_months', 'wait_min_months', 'wait_max_months'])
+
+        for batch in batches:
+            for size in SIZES:
+                waits = [float(row['wait_months']) for row in batch['rows'] if int(row['maximum_cidr']) == size]
+                if not waits:
+                    continue
+                writer.writerow([
+                    batch['end'],
+                    size,
+                    len(waits),
+                    f'{percentile(waits, 0.5):.1f}',
+                    f'{percentile(waits, 0.25):.1f}',
+                    f'{percentile(waits, 0.75):.1f}',
+                    f'{min(waits):.1f}',  # Roughly the newest request filled
+                    f'{max(waits):.1f}'
+                ])
 
 def output_csv(row, include_header=True):
     """
@@ -1122,6 +1234,7 @@ def reprocess_git_history(output_file):
         # Track previous snapshot for churn and fill detection
         previous_data = None
         previous_row = None
+        fill_rows = []
 
         # === Main Processing Loop ===
         # Process each commit in chronological order to build time-series data
@@ -1146,14 +1259,17 @@ def reprocess_git_history(output_file):
                 print(f"  Snapshot unchanged at commit {commit[:8]}, skipping", file=sys.stderr)
                 continue
 
-            row = analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, previous_row)
+            row, fills = analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, previous_row)
             writer.writerow([row[column] for column in CSV_HEADER])
+            fill_rows += fill_log_rows(fills)
 
             # Store this snapshot as "previous" for the next iteration
             previous_data = waitlist_data
             previous_row = {column: str(value) for column, value in row.items()}
 
     write_issued_by_quarter(issued_df, os.path.join(os.path.dirname(output_file), 'issued_by_quarter.csv'))
+    write_fill_log(fill_rows)
+    write_fills_by_batch(fill_rows, os.path.join(os.path.dirname(output_file), 'fills_by_batch.csv'))
 
     print(f"Reprocessing complete! Output written to {output_file}", file=sys.stderr)
 
@@ -1238,7 +1354,7 @@ try:
         previous_data, _ = load_waitlist_data(args.previous_file)
 
     # === Calculate Metrics ===
-    row = analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, previous_row)
+    row, fills = analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, previous_row)
 
 except requests.exceptions.RequestException as e:
     print(f"Error fetching waitlist JSON: {e}", file=sys.stderr)
@@ -1253,10 +1369,16 @@ except Exception as e:
     print(f"An error occurred while processing the waitlist: {e}", file=sys.stderr)
     sys.exit(1)
 
-# --- Step 3: Update Issued Space Summary ---
-# Per-quarter supply used by the dashboard (live mode only, alongside the time-series CSV)
+# --- Step 3: Update Issued Space and Fill Summaries ---
+# Per-quarter supply and per-batch waits used by the dashboard (live mode only, alongside
+# the time-series CSV). New fills are added to the fill log, which keeps the history.
 if not args.file:
-    write_issued_by_quarter(issued_df, os.path.join(os.path.dirname(args.output_csv), 'issued_by_quarter.csv'))
+    output_dir = os.path.dirname(args.output_csv)
+    write_issued_by_quarter(issued_df, os.path.join(output_dir, 'issued_by_quarter.csv'))
+
+    fill_rows = load_fill_log() + fill_log_rows(fills)
+    write_fill_log(fill_rows)
+    write_fills_by_batch(fill_rows, os.path.join(output_dir, 'fills_by_batch.csv'))
 
 # --- Step 4: Output Results ---
 # Output all calculated metrics in the requested format (CSV or human-readable text)

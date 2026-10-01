@@ -397,6 +397,18 @@
         </div>
 
         <div class="chart-container">
+            <h2>Time on Waitlist When Filled</h2>
+            <p class="chart-note">
+                How long requests actually waited, for each issuance batch: the median wait of requests
+                of each size filled in that batch, with the middle half shaded. Before September 2025 snapshots
+                were months apart, so which batch filled each request is reconstructed by simulation.
+            </p>
+            <div class="chart-wrapper">
+                <canvas id="fillWaitChart"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
             <h2>Address Space Issued Per Quarter</h2>
             <p class="chart-note">
                 Measured in /24 equivalents (/22 = 4, /16 = 256). Larger blocks are split
