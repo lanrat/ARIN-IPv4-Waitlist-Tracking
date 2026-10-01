@@ -386,9 +386,10 @@
             <p class="chart-note">
                 Requests are filled first-come-first-served in roughly quarterly batches, but only
                 when a block of the right size is available (several /24s can't be combined into a /22).
-                Estimates (solid) simulate future batches by replaying the blocks ARIN issued over the
-                last two years against the current line. Dashed steps show how long the newest request
-                filled in each batch actually waited.
+                Estimates (solid) simulate future batches by replaying ARIN's issuance history since 2020
+                against the current line, starting from each past quarter in turn; the cards show the average
+                and the typical (25th&ndash;75th percentile) range. Dashed steps show how long the newest
+                request filled in each batch actually waited.
             </p>
             <div class="chart-wrapper">
                 <canvas id="waitTimeChart"></canvas>

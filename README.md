@@ -18,7 +18,7 @@ Analyzes ARIN's IPv4 waiting list and estimates wait times based on the address 
 - **Flexibility Analysis**: Tracks how many requesters are willing to accept different block sizes
 - **Age Distribution**: Analyzes how long requests have been waiting, broken down by CIDR size
 - **Git History Integration**: Uses git commits to track waitlist changes over time
-- **Time-Series Data**: Exports comprehensive CSV data (43 columns) for analysis
+- **Time-Series Data**: Exports comprehensive CSV data (49 columns) for analysis
 - **Interactive Dashboard**: Web-based visualizations with 9 charts:
   - Waitlist size over time
   - Estimated vs observed wait time (months)
@@ -71,12 +71,15 @@ ARIN's [issued blocks list](https://www.arin.net/resources/guide/ipv4/blocks_cle
 blocks (/15–/21) that are split to fill many /22–/24 requests, so the model works from the actual blocks
 issued rather than counting /22–/24 rows.
 
-- **Estimated wait (joining now)**, per size: the blocks ARIN issued in each of the last 8 quarters
-  (quarters with no issuance count as empty) are replayed as future quarterly batches over the current
-  line. Each simulated batch fills requests in line order, giving each the largest size it accepts that
-  a remaining block can hold (splitting larger blocks) and skipping requests nothing fits. A new request
-  at the back of the line is filled in the first batch with a suitable block left over. The replay starts
-  from each of the 8 quarters in turn and the waits are averaged.
+- **Estimated wait (joining now)**, per size: the blocks ARIN issued in every quarter since its list
+  begins in 2020 (quarters with no issuance count as empty) are replayed as future quarterly batches over
+  the current line. Each simulated batch fills requests in line order, giving each the largest size it
+  accepts that a remaining block can hold (splitting larger blocks) and skipping requests nothing fits.
+  A new request at the back of the line is filled in the first batch with a suitable block left over.
+  The replay starts from each past quarter in turn; the dashboard shows the average wait and the typical
+  (25th–75th percentile) range across those scenarios. Replaying all history rather than recent quarters
+  keeps one unusual batch (like October 2025's 1,471 /24 equivalents, or July 2026's 177 /24 blocks)
+  from dominating; backtested against actual waits it was the most accurate window tried.
   On the 2025–2026 batches this simulation reproduces 85–99% of the requests ARIN actually filled,
   including the July 2026 batch where mostly-/24 blocks let /24 requests jump months ahead of /22s.
 - **Most recent fills** = for each block size, how long the newest request filled in the latest batch
@@ -84,14 +87,14 @@ issued rather than counting /22–/24 rows.
   at least 8 of the 10 same-size requests up to it in line were removed, which ignores withdrawals and
   requests stuck at the front of the line.
 
-The estimate assumes future batches look like the last two years, and batches vary a lot (165 to 1,471
-/24 equivalents over 2025–2026, sometimes mostly /24 blocks), so treat it as a rough guide and compare it
-with the observed waits. Requests that ARIN skips for review stay in the simulated line, so estimates
+The estimate assumes future batches look like past ones, and batches vary a lot (0 to 1,471 /24
+equivalents per quarter, sometimes mostly /24 blocks), so treat it as a rough guide, look at the range,
+and compare it with the observed waits. Requests that ARIN skips for review stay in the simulated line, so estimates
 lean slightly long.
 
 ## Output Files
 
-- `docs/waitlist_data.csv` - Time-series data for dashboard (43 columns including counts, churn, flexibility, age distribution, wait times)
+- `docs/waitlist_data.csv` - Time-series data for dashboard (49 columns including counts, churn, flexibility, age distribution, wait times)
 - `docs/issued_by_quarter.csv` - Address space issued per quarter by source block size
 - `data/waitlist_data.json` - Current waitlist snapshot (tracked in git)
 - `data/historical_data.csv` - Historical issued blocks data (cached from ARIN)
@@ -133,14 +136,14 @@ Manual runs available via workflow dispatch.
 
 ## Data Columns
 
-The CSV file contains 43 columns tracking:
+The CSV file contains 49 columns tracking:
 
 - **Basic Counts**: Total requests and breakdown by CIDR size (/22, /23, /24)
 - **Churn Metrics**: Added/removed requests by size, net change
 - **Flexibility**: Exact vs flexible requests, average flexibility
 - **Age by Size**: Age distribution broken down by CIDR size across 5 age ranges (0-3mo, 3-6mo, 6-12mo, 12-24mo, 24+mo)
 - **Supply and Queue**: /24 equivalents waiting and average /24 equivalents issued per quarter
-- **Wait Times**: Estimated wait (months) for a new request of each size, and the date and wait of the most recent fill by size
+- **Wait Times**: Estimated wait (months) for a new request of each size with its 25th–75th percentile range, and the date and wait of the most recent fill by size
 
 ## Requirements
 

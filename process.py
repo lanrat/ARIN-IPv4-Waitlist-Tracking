@@ -13,10 +13,13 @@ How wait times are estimated:
   needs a block that can hold a /22, while several /24 blocks cannot be combined.
 - ARIN's issued-blocks list includes large blocks (/15-/21) that are split to fill many
   /22-/24 requests, so supply is the actual blocks issued, not a count of /22-/24 rows.
-- Estimated wait for a new request of each size: the last 8 quarters of issued blocks are
-  replayed as future batches over the current line (simulating how ARIN fills it, block by
-  block), starting from each quarter in turn, and the time until the new request at the
-  back of the line is filled is averaged.
+- Estimated wait for a new request of each size: ARIN's issuance history (every quarter
+  since its list begins in 2020) is replayed as future batches over the current line,
+  simulating how ARIN fills it block by block. Each starting quarter is one scenario; the
+  average wait and the 25th-75th percentile range across scenarios are reported. Batches
+  are lumpy (occasional very large or mostly-/24 batches), so a long history keeps any
+  single unusual batch from dominating; backtested against actual waits this was the most
+  accurate window tried (vs the last 8 or 16 quarters).
 - As a check against reality, each issuance batch is detected from snapshot diffs and the
   wait of the most recently joined request that was filled is recorded per block size.
 
@@ -50,8 +53,7 @@ HISTORICAL_DATA_URL = 'https://www.arin.net/resources/guide/ipv4/blocks_cleared/
 CURRENT_WAITLIST_URL = 'https://accountws.arin.net/public/rest/waitingList'
 
 # --- Wait time model parameters ---
-# Recent quarters of issued blocks replayed as future batches (ARIN issues about one batch
-# per quarter, and batch sizes vary by almost 10x, so a short window swings wildly)
+# Quarters averaged for the recent supply rate (ARIN issues about one batch per quarter)
 SUPPLY_WINDOW_QUARTERS = 8
 # Stop simulating future batches after this many (10 years); the wait is then reported as inf
 MAX_SIMULATED_BATCHES = 40
@@ -109,8 +111,14 @@ CSV_HEADER = [
     'queue_24eq',  # /24 equivalents waiting (by maximumCidr)
     'supply_24eq_per_quarter',  # Average /24 equivalents issued per quarter (trailing window)
     'estimated_wait_months_22',  # Estimated wait for a new /22 request joining at this snapshot
+    'estimated_wait_p25_months_22',  # 25th-75th percentile range across historical scenarios
+    'estimated_wait_p75_months_22',
     'estimated_wait_months_23',
+    'estimated_wait_p25_months_23',
+    'estimated_wait_p75_months_23',
     'estimated_wait_months_24',
+    'estimated_wait_p25_months_24',
+    'estimated_wait_p75_months_24',
     'last_fill_date_22',  # Date of the most recent batch that filled /22 requests
     'last_fill_date_23',
     'last_fill_date_24',
@@ -292,9 +300,9 @@ def calculate_queue_24eq(waitlist_data):
     """
     return sum(2 ** (24 - item['maximumCidr']) for item in waitlist_data)
 
-def recent_quarter_batches(issued_df, as_of):
+def quarter_batches(issued_df, as_of, quarter_count=None):
     """
-    Blocks issued in each of the last SUPPLY_WINDOW_QUARTERS calendar quarters, oldest first.
+    Blocks issued in each calendar quarter up to as_of, oldest first.
 
     The window ends with the current quarter once its batch has been issued, otherwise
     with the previous quarter. Quarters with no issuance are included as empty batches.
@@ -304,25 +312,30 @@ def recent_quarter_batches(issued_df, as_of):
     Args:
         issued_df (DataFrame): Parsed issued blocks from parse_issued_blocks()
         as_of (datetime): Snapshot time
+        quarter_count (int): Number of most recent quarters, or None for every quarter
+            since ARIN's list begins
 
     Returns:
         list: One list of block prefix lengths per quarter (e.g. [[24, 24, 20], [], ...])
     """
     issued = issued_df[issued_df['Date Reissued'] <= to_naive_utc(as_of)]
+    if issued.empty:
+        return [[]]
     quarters = issued['Date Reissued'].dt.year * 4 + (issued['Date Reissued'].dt.month - 1) // 3
 
     current_quarter = as_of.year * 4 + (as_of.month - 1) // 3
     last_quarter = current_quarter if (quarters == current_quarter).any() else current_quarter - 1
+    first_quarter = quarters.min() if quarter_count is None else last_quarter - quarter_count + 1
 
     return [issued.loc[quarters == quarter, 'Prefix Size'].tolist()
-            for quarter in range(last_quarter - SUPPLY_WINDOW_QUARTERS + 1, last_quarter + 1)]
+            for quarter in range(first_quarter, last_quarter + 1)]
 
 def calculate_supply_rate(batches):
     """
     Average address space issued per quarter, in /24 equivalents.
 
     Args:
-        batches (list): Per-quarter block prefix lengths from recent_quarter_batches()
+        batches (list): Per-quarter block prefix lengths from quarter_batches()
 
     Returns:
         float: /24 equivalents issued per quarter
@@ -393,21 +406,21 @@ def estimate_waits_by_size(waitlist_data, batches, snapshot_time, last_batch_tim
     """
     Estimate how long a new request of each size would wait, by simulating future batches.
 
-    Future batches are assumed to look like the recent past: the recent quarters of issued
-    blocks are replayed in order over the current line, starting from each quarter in turn,
-    and the results are averaged. A new request joins at the back of the line, so it is
+    Future batches are assumed to look like the past: the quarters of issued blocks are
+    replayed in order over the current line, starting from each quarter in turn (one
+    scenario per starting quarter). A new request joins at the back of the line, so it is
     filled in the first batch that has a suitable block left after everyone ahead of it
     has been considered (requests that join later are behind it and don't matter).
 
     Args:
         waitlist_data (list): Current waitlist snapshot (normalized)
-        batches (list): Per-quarter block prefix lengths from recent_quarter_batches()
+        batches (list): Per-quarter block prefix lengths from quarter_batches()
         snapshot_time (datetime): When the snapshot was taken
         last_batch_time (datetime): When the most recent batch was issued, or None
 
     Returns:
-        dict: Estimated months of waiting by size {22: 11.2, 23: 11.0, 24: 7.5}
-            (inf if not filled within MAX_SIMULATED_BATCHES)
+        dict: (average, 25th percentile, 75th percentile) months of waiting across scenarios,
+            by size {22: (11.6, 9.0, 14.9), ...} (inf if not filled within MAX_SIMULATED_BATCHES)
     """
     queue = sorted(waitlist_data, key=lambda item: item['waitListActionDate'])
 
@@ -439,7 +452,18 @@ def estimate_waits_by_size(waitlist_data, batches, snapshot_time, last_batch_tim
         for size in pending:
             waits[size].append(float('inf'))
 
-    return {size: sum(months) / len(months) for size, months in waits.items()}
+    return {size: (sum(months) / len(months), percentile(months, 0.25), percentile(months, 0.75))
+            for size, months in waits.items()}
+
+def percentile(values, share):
+    """Linear-interpolated percentile of a list (share between 0 and 1)."""
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * share
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    if ordered[upper] == float('inf'):
+        return ordered[upper] if position > lower else ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 def detect_filled_requests(current_data, previous_data, snapshot_time, previous_time, issued_df):
     """
@@ -797,9 +821,8 @@ def analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, pre
                                 previous_row.get(f'last_fill_wait_months_{size}', ''))
 
     # === Estimated Wait (forward-looking) ===
-    # Replay recent batches over the current line to see when a new request would be filled
-    batches = recent_quarter_batches(issued_df, snapshot_time)
-    supply_rate = calculate_supply_rate(batches)
+    # Replay past batches over the current line to see when a new request would be filled
+    supply_rate = calculate_supply_rate(quarter_batches(issued_df, snapshot_time, SUPPLY_WINDOW_QUARTERS))
 
     # The most recent batch is the later of ARIN's published batches and fills we observed
     # (ARIN publishes its list a few days after removing requests)
@@ -807,7 +830,8 @@ def analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, pre
     published = issued_df.loc[issued_df['Date Reissued'] <= to_naive_utc(snapshot_time), 'Date Reissued']
     if not published.empty:
         batch_times.append(published.max().to_pydatetime().replace(tzinfo=timezone.utc))
-    estimated_waits = estimate_waits_by_size(waitlist_data, batches, snapshot_time, max(batch_times, default=None))
+    estimated_waits = estimate_waits_by_size(waitlist_data, quarter_batches(issued_df, snapshot_time),
+                                             snapshot_time, max(batch_times, default=None))
 
     row = {
         'timestamp': format_timestamp(snapshot_time),
@@ -834,8 +858,9 @@ def analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, pre
             row[f'age_{column}_{size}'] = age_dist['bins_by_size'][age_bin][size]
 
     for size in SIZES:
-        waited = estimated_waits[size]
-        row[f'estimated_wait_months_{size}'] = f'{waited:.1f}' if waited != float('inf') else 'inf'
+        for column, waited in zip(('estimated_wait_months', 'estimated_wait_p25_months', 'estimated_wait_p75_months'),
+                                  estimated_waits[size]):
+            row[f'{column}_{size}'] = f'{waited:.1f}' if waited != float('inf') else 'inf'
         row[f'last_fill_date_{size}'], row[f'last_fill_wait_months_{size}'] = last_fills[size]
 
     return row
@@ -943,9 +968,11 @@ def output_text(row):
     print(f"* **{row['queue_24eq']} /24 equivalents** are waiting in line.")
     print(f"* Over the last {SUPPLY_WINDOW_QUARTERS} quarters ARIN issued an average of "
           f"**{row['supply_24eq_per_quarter']} /24 equivalents per quarter** (all block sizes).")
-    print("* If future batches look like those quarters, a request joining now would wait approximately:")
+    print("* Replaying ARIN's issuance history over the current line, a request joining now would wait")
+    print("  approximately (typical range in parentheses):")
     for size in SIZES:
-        print(f"    * **/{size}:** {row[f'estimated_wait_months_{size}']} months")
+        print(f"    * **/{size}:** {row[f'estimated_wait_months_{size}']} months "
+              f"({row[f'estimated_wait_p25_months_{size}']}-{row[f'estimated_wait_p75_months_{size}']})")
 
     if any(row[f'last_fill_date_{size}'] for size in SIZES):
         print("\n" + "---")

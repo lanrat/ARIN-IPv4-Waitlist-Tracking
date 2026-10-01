@@ -671,9 +671,13 @@ function updateStatistics(data) {
         document.getElementById('total-requests').textContent = formatNumber(totalReq);
 
         // Update estimated wait
-        document.getElementById('estimated-wait-22').textContent = formatMonths(estimatedWait22);
-        document.getElementById('estimated-wait-23').textContent = formatMonths(estimatedWait23);
-        document.getElementById('estimated-wait-24').textContent = formatMonths(estimatedWait24);
+        // Average across historical scenarios, with the typical (25th-75th percentile) range
+        [['22', estimatedWait22], ['23', estimatedWait23], ['24', estimatedWait24]].forEach(([size, waited]) => {
+            const low = parseFloat(latest[`estimated_wait_p25_months_${size}`]);
+            const high = parseFloat(latest[`estimated_wait_p75_months_${size}`]);
+            const range = isFinite(low) && isFinite(high) ? ` (${Math.round(low)}–${Math.round(high)})` : '';
+            document.getElementById(`estimated-wait-${size}`).textContent = formatMonths(waited) + range;
+        });
         document.getElementById('supply-24eq').textContent = formatNumber(supply24eq);
 
         // Update most recent fills (a size not filled in the latest batch shows its own batch date)
