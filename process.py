@@ -3,22 +3,33 @@
 ARIN IPv4 Waitlist Tracker
 
 This script analyzes the ARIN IPv4 waitlist and estimates wait times based on historical
-data of cleared blocks. It tracks changes over time using git history and provides
+data of issued blocks. It tracks changes over time using git history and provides
 comprehensive statistics including request churn, age distribution, and flexibility metrics.
 
+How wait times are estimated:
+- The waitlist is a single first-come-first-served line (ordered by waitListActionDate)
+  that ARIN fills in roughly quarterly batches.
+- Supply is measured as address space in /24 equivalents. ARIN's issued-blocks list
+  includes large blocks (/15-/21) that are split to fill many /22-/24 requests, so
+  counting only the /22-/24 rows badly undercounts what ARIN actually hands out.
+- Estimated wait for a request joining now = /24 equivalents already waiting divided by
+  the average /24 equivalents issued per quarter over a trailing window.
+- As a check against reality, each issuance batch is detected from snapshot diffs and the
+  wait of the most recently joined request that was filled is recorded per block size.
+
 Key Features:
-- Fetches current waitlist and historical cleared blocks data from ARIN
+- Fetches current waitlist and historical issued blocks data from ARIN
 - Compares snapshots to track added/removed requests
-- Calculates wait time estimates based on historical clearance rates
+- Estimates wait times from queue position and issued address space
+- Measures how long the most recently filled requests actually waited
 - Tracks request flexibility (willingness to accept different block sizes)
 - Analyzes request age distribution across CIDR sizes
 - Can reprocess entire git history to regenerate time-series data
 """
 
-import pandas as pd  # For processing historical clearance data
+import pandas as pd  # For processing historical issued blocks data
 import json  # For parsing ARIN waitlist JSON
 from collections import Counter  # For counting CIDR sizes
-import math  # For wait time calculations
 import requests  # For fetching data from ARIN URLs
 import io  # For in-memory CSV processing
 import argparse  # For command-line argument parsing
@@ -26,13 +37,80 @@ import csv  # For CSV output
 import sys  # For stderr output and exit codes
 import os  # For file path operations
 import subprocess  # For git commands in reprocessing mode
-from datetime import datetime, timezone  # For timestamp handling and age calculations
+from datetime import datetime, timedelta, timezone  # For timestamp handling and age calculations
+from zoneinfo import ZoneInfo  # For repairing old US/Eastern timestamps
 
 # --- URLs for the data ---
-# Historical data: CSV of all IPv4 blocks cleared from the waitlist
+# Historical data: CSV of all IPv4 blocks issued to the waitlist
 HISTORICAL_DATA_URL = 'https://www.arin.net/resources/guide/ipv4/blocks_cleared/waiting_list_blocks_issued.csv'
 # Current waitlist: JSON API endpoint with all pending requests
 CURRENT_WAITLIST_URL = 'https://accountws.arin.net/public/rest/waitingList'
+
+# --- Wait time model parameters ---
+# Supply rate is averaged over this many quarters (ARIN issues about one batch per quarter,
+# and batch sizes vary by almost 10x, so a short window swings wildly)
+SUPPLY_WINDOW_QUARTERS = 8
+DAYS_PER_QUARTER = 365.25 / 4
+DAYS_PER_MONTH = 365.25 / 12
+# A snapshot diff with at least this many removals is treated as an issuance batch.
+# Between batches only a handful of requests are withdrawn per snapshot.
+BATCH_MIN_REMOVALS = 10
+# A request counts as "served" by a batch when at least SERVED_WINDOW_SHARE of the
+# SERVED_WINDOW same-size requests up to and including it in line were removed. A local
+# window ignores requests stuck at the front of the line and lone withdrawals further back.
+SERVED_WINDOW = 10
+SERVED_WINDOW_SHARE = 0.8
+# Block sizes that can be requested from the waitlist
+SIZES = (22, 23, 24)
+
+# Old snapshots converted from ARIN's HTML page carry a bogus local mean time offset
+# (-04:56) on what were US/Eastern wall-clock times
+EASTERN = ZoneInfo('America/New_York')
+
+# Columns of the time-series CSV (docs/waitlist_data.csv), in output order
+CSV_HEADER = [
+    'timestamp',
+    'total_requests',
+    'requests_22',
+    'requests_23',
+    'requests_24',
+    'added_22',
+    'added_23',
+    'added_24',
+    'added_total',
+    'removed_22',
+    'removed_23',
+    'removed_24',
+    'removed_total',
+    'net_change',
+    'flexible_requests',
+    'exact_requests',
+    'avg_flexibility',
+    'age_0_3mo_22',
+    'age_0_3mo_23',
+    'age_0_3mo_24',
+    'age_3_6mo_22',
+    'age_3_6mo_23',
+    'age_3_6mo_24',
+    'age_6_12mo_22',
+    'age_6_12mo_23',
+    'age_6_12mo_24',
+    'age_12_24mo_22',
+    'age_12_24mo_23',
+    'age_12_24mo_24',
+    'age_24plus_22',
+    'age_24plus_23',
+    'age_24plus_24',
+    'queue_24eq',  # /24 equivalents waiting (by maximumCidr)
+    'supply_24eq_per_quarter',  # Average /24 equivalents issued per quarter (trailing window)
+    'estimated_wait_months',  # Estimated wait for a request joining at this snapshot
+    'last_fill_date_22',  # Date of the most recent batch that filled /22 requests
+    'last_fill_date_23',
+    'last_fill_date_24',
+    'last_fill_wait_months_22',  # How long the newest filled /22 request had waited
+    'last_fill_wait_months_23',
+    'last_fill_wait_months_24'
+]
 
 def parse_arguments():
     """
@@ -45,7 +123,8 @@ def parse_arguments():
             - file: Local JSON file path (instead of fetching from URL)
             - previous_file: Previous snapshot for comparison (enables add/remove tracking)
             - reprocess_history: Regenerate entire CSV from git history
-            - output_csv: Output file path for reprocessing mode
+            - output_csv: Time-series CSV path (read for the previous row in live mode,
+              written in reprocessing mode)
     """
     parser = argparse.ArgumentParser(description='Analyze ARIN IPv4 waitlist and estimate wait times')
     parser.add_argument('--csv', action='store_true', help='Output data in CSV format')
@@ -53,15 +132,59 @@ def parse_arguments():
     parser.add_argument('--file', type=str, help='Use local waitlist file (JSON format) instead of fetching from URL')
     parser.add_argument('--previous-file', type=str, help='Previous waitlist file to compare against for tracking adds/removes')
     parser.add_argument('--reprocess-history', action='store_true', help='Reprocess all git history commits and regenerate CSV')
-    parser.add_argument('--output-csv', type=str, default='docs/waitlist_data.csv', help='Output CSV file path (default: docs/waitlist_data.csv)')
+    parser.add_argument('--output-csv', type=str, default='docs/waitlist_data.csv', help='Time-series CSV file path (default: docs/waitlist_data.csv)')
     return parser.parse_args()
+
+def parse_timestamp(timestamp):
+    """
+    Parse an ARIN waitListActionDate (or snapshot timestamp) into a UTC datetime.
+
+    ARIN's timestamp format has changed over time ('...+00:00' vs '...Z', with and
+    without milliseconds), and old HTML-derived snapshots use a -04:56 offset that
+    really means US/Eastern local time.
+
+    Args:
+        timestamp (str): ISO format timestamp
+
+    Returns:
+        datetime: Timezone-aware UTC datetime
+    """
+    if timestamp.endswith('-04:56'):
+        local_time = datetime.fromisoformat(timestamp[:-6]).replace(tzinfo=EASTERN)
+        return local_time.astimezone(timezone.utc)
+
+    parsed = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+def format_timestamp(timestamp):
+    """
+    Format a datetime as a canonical UTC ISO string (e.g. '2026-10-01T08:08:44.000Z').
+
+    Canonical strings sort chronologically and compare equal across ARIN format changes.
+    """
+    return timestamp.astimezone(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+
+def request_key(item):
+    """
+    Unique identifier for a waitlist request: its waitListActionDate to the second.
+
+    The date is kept when a request changes size, so it identifies a request across
+    snapshots. Seconds precision is used because old snapshots lack milliseconds.
+    """
+    return item['waitListActionDate'][:19]
+
+def to_naive_utc(timestamp):
+    """Convert a timezone-aware datetime to naive UTC for comparison with pandas dates."""
+    return timestamp.astimezone(timezone.utc).replace(tzinfo=None)
 
 def parse_waitlist_json(json_content):
     """
-    Parse JSON waitlist data and normalize field names for consistency.
+    Parse JSON waitlist data and normalize field names and timestamps for consistency.
 
-    ARIN's API format has changed over time (lowercase -> camelCase), so we normalize
-    to the current camelCase format for consistent processing.
+    ARIN's API format has changed over time (lowercase -> camelCase, timestamp formats),
+    so we normalize to camelCase fields and canonical UTC timestamps.
 
     Args:
         json_content (str): Raw JSON string from ARIN API or historical file
@@ -86,9 +209,10 @@ def parse_waitlist_json(json_content):
 
         # Only include valid entries with required fields
         if timestamp and max_cidr:
+            timestamp = format_timestamp(parse_timestamp(timestamp))
             timestamps.append(timestamp)
             normalized_data.append({
-                'waitListActionDate': timestamp,  # ISO format datetime when request was created
+                'waitListActionDate': timestamp,  # Canonical UTC datetime when request joined the list
                 'minimumCidr': int(min_cidr) if min_cidr else None,  # Smallest block they'll accept
                 'maximumCidr': int(max_cidr)  # Largest block they'll accept (their preference)
             })
@@ -112,6 +236,136 @@ def load_waitlist_data(file_path):
         content = f.read()
 
     return parse_waitlist_json(content)
+
+def fetch_issued_blocks():
+    """
+    Fetch ARIN's CSV of all IPv4 blocks issued to the waitlist.
+
+    Returns:
+        str: CSV text (without byte order mark)
+    """
+    response = requests.get(HISTORICAL_DATA_URL, timeout=10)
+    response.raise_for_status()  # Raise exception for HTTP errors (4xx or 5xx)
+    return response.text.lstrip('﻿')
+
+def parse_issued_blocks(csv_text):
+    """
+    Parse ARIN's issued blocks CSV into a DataFrame.
+
+    Args:
+        csv_text (str): CSV text with 'CIDR Prefix' and 'Date Reissued' columns
+
+    Returns:
+        DataFrame: One row per issued block with added columns:
+            - Prefix Size: CIDR prefix length (e.g., 24)
+            - Size 24eq: Address space in /24 equivalents (/22 = 4, /16 = 256)
+    """
+    issued_df = pd.read_csv(io.StringIO(csv_text))
+
+    # Clean up column names (remove whitespace and any byte order mark)
+    issued_df.columns = issued_df.columns.str.strip().str.lstrip('﻿')
+
+    # Extract CIDR size from the 'CIDR Prefix' column
+    # Example: '192.0.2.0/24' -> 24
+    issued_df['Prefix Size'] = issued_df['CIDR Prefix'].apply(lambda x: int(x.split('/')[1]))
+
+    # Convert 'Date Reissued' string to datetime objects for time-series analysis
+    # ARIN uses MM/DD/YY format
+    issued_df['Date Reissued'] = pd.to_datetime(issued_df['Date Reissued'], format='%m/%d/%y')
+
+    # Large blocks (/15-/21) are split to fill many /22-/24 requests, so supply is
+    # measured in address space rather than block counts
+    issued_df['Size 24eq'] = 2 ** (24 - issued_df['Prefix Size'])
+
+    return issued_df
+
+def calculate_queue_24eq(waitlist_data):
+    """
+    Total address space waiting, in /24 equivalents (using each request's maximumCidr).
+    """
+    return sum(2 ** (24 - item['maximumCidr']) for item in waitlist_data)
+
+def calculate_supply_rate(issued_df, as_of):
+    """
+    Average address space issued per quarter over the trailing window, in /24 equivalents.
+
+    Quarters with no issuance count as zero. Only blocks issued on or before as_of are
+    used, so historical snapshots see only what had been issued at that time.
+
+    Args:
+        issued_df (DataFrame): Parsed issued blocks from parse_issued_blocks()
+        as_of (datetime): Snapshot time
+
+    Returns:
+        float: /24 equivalents issued per quarter
+    """
+    window_start = as_of - timedelta(days=SUPPLY_WINDOW_QUARTERS * DAYS_PER_QUARTER)
+    in_window = issued_df[(issued_df['Date Reissued'] > to_naive_utc(window_start)) &
+                          (issued_df['Date Reissued'] <= to_naive_utc(as_of))]
+    return in_window['Size 24eq'].sum() / SUPPLY_WINDOW_QUARTERS
+
+def detect_filled_requests(current_data, previous_data, snapshot_time, previous_time, issued_df):
+    """
+    Detect an issuance batch between two snapshots and measure how long filled requests waited.
+
+    ARIN fills the waitlist in order of waitListActionDate, so a batch removes a run of
+    the oldest requests. For each block size this finds the newest request that was
+    served (most of the same-size requests just ahead of it were removed too) and
+    reports how long it had waited.
+
+    Args:
+        current_data (list): Current waitlist snapshot (normalized)
+        previous_data (list): Previous waitlist snapshot (normalized), or None
+        snapshot_time (datetime): Time of the current snapshot
+        previous_time (datetime): Time of the previous snapshot, or None if unknown
+        issued_df (DataFrame): Parsed issued blocks, used to date the batch
+
+    Returns:
+        tuple: (fill_time, waits)
+            - fill_time: When the batch was issued (ARIN's batch date when published,
+              otherwise the snapshot time), or None if no batch was detected
+            - waits: Dict of months waited by the newest served request {22: 10.0, ...};
+              sizes with no served requests are omitted
+    """
+    if not previous_data:
+        return None, {}
+
+    current_keys = {request_key(item) for item in current_data}
+    removed_keys = {request_key(item) for item in previous_data} - current_keys
+
+    # A few removals between batches are withdrawals, not fills
+    if len(removed_keys) < BATCH_MIN_REMOVALS:
+        return None, {}
+
+    # Use ARIN's batch date when it has been published; removals can lag the batch
+    # date by a few days, so allow a little slack before the previous snapshot
+    fill_time = snapshot_time
+    if previous_time is not None:
+        batch_dates = issued_df[(issued_df['Date Reissued'] > to_naive_utc(previous_time - timedelta(days=3))) &
+                                (issued_df['Date Reissued'] <= to_naive_utc(snapshot_time))]['Date Reissued']
+        if not batch_dates.empty:
+            fill_time = batch_dates.max().to_pydatetime().replace(tzinfo=timezone.utc)
+
+    waits = {}
+    for size in SIZES:
+        # Same-size requests in line order (canonical timestamps sort chronologically)
+        queue = sorted((item for item in previous_data if item['maximumCidr'] == size),
+                       key=lambda item: item['waitListActionDate'])
+
+        removed_flags = [request_key(item) in removed_keys for item in queue]
+
+        served = None
+        for position, item in enumerate(queue):
+            if removed_flags[position]:
+                window = removed_flags[max(0, position + 1 - SERVED_WINDOW):position + 1]
+                if sum(window) / len(window) >= SERVED_WINDOW_SHARE:
+                    served = item
+
+        if served:
+            waited = fill_time - parse_timestamp(served['waitListActionDate'])
+            waits[size] = max(waited.total_seconds(), 0) / 86400 / DAYS_PER_MONTH
+
+    return fill_time, waits
 
 def compare_waitlists(current_data, previous_data):
     """
@@ -138,8 +392,8 @@ def compare_waitlists(current_data, previous_data):
     """
     # Create dictionaries keyed by waitListActionDate (unique identifier for each request)
     # This allows O(1) lookup and easy set operations to find differences
-    current_requests = {item['waitListActionDate']: item for item in current_data}
-    previous_requests = {item['waitListActionDate']: item for item in previous_data} if previous_data else {}
+    current_requests = {request_key(item): item for item in current_data}
+    previous_requests = {request_key(item): item for item in previous_data} if previous_data else {}
 
     # Find added and removed requests using set difference operations
     # Added: present in current but not in previous
@@ -275,7 +529,7 @@ def calculate_age_distribution(waitlist_data, reference_time=None):
         reference_time = datetime.now(timezone.utc)  # Current time for live analysis
     elif isinstance(reference_time, str):
         # Parse ISO format timestamp (e.g., from git commit or CSV)
-        reference_time = datetime.fromisoformat(reference_time.replace('Z', '+00:00'))
+        reference_time = parse_timestamp(reference_time)
 
     # Ensure reference_time is timezone-aware for consistent comparisons
     if reference_time.tzinfo is None:
@@ -310,7 +564,7 @@ def calculate_age_distribution(waitlist_data, reference_time=None):
 
         try:
             # Parse the ISO format action date
-            action_date = datetime.fromisoformat(action_date_str.replace('Z', '+00:00'))
+            action_date = parse_timestamp(action_date_str)
 
             # Calculate age in days (how long this request has been waiting)
             age_days = (reference_time - action_date).days
@@ -321,7 +575,7 @@ def calculate_age_distribution(waitlist_data, reference_time=None):
             cidr_key = str(min_cidr) if min_cidr in [22, 23, 24] else None
 
             # Convert days to months using average days per month (365.25/12)
-            age_months = age_days / 30.44
+            age_months = age_days / DAYS_PER_MONTH
 
             # Bin the request by age range and optionally by CIDR size
             if age_months < 3:
@@ -364,33 +618,135 @@ def calculate_age_distribution(waitlist_data, reference_time=None):
         'median_age_days': median_age_days  # Median wait time
     }
 
-def output_csv(total_requests, requests_22, requests_23, requests_24,
-               avg_22_cleared, avg_23_cleared, avg_24_cleared,
-               quarters_22, quarters_23, quarters_24, years_22, years_23, years_24,
-               added_22=0, added_23=0, added_24=0, added_total=0,
-               removed_22=0, removed_23=0, removed_24=0, removed_total=0,
-               flexible_requests=0, exact_requests=0, avg_flexibility=0.0,
-               size_changes=0, upsize_changes=0, downsize_changes=0, flexibility_changes=0,
-               age_0_3mo=0, age_3_6mo=0, age_6_12mo=0, age_12_24mo=0, age_24plus=0,
-               avg_age_days=0, median_age_days=0, min_age_days=0, max_age_days=0,
-               age_0_3mo_22=0, age_0_3mo_23=0, age_0_3mo_24=0,
-               age_3_6mo_22=0, age_3_6mo_23=0, age_3_6mo_24=0,
-               age_6_12mo_22=0, age_6_12mo_23=0, age_6_12mo_24=0,
-               age_12_24mo_22=0, age_12_24mo_23=0, age_12_24mo_24=0,
-               age_24plus_22=0, age_24plus_23=0, age_24plus_24=0,
-               include_header=True):
+def analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, previous_row=None):
     """
-    Output comprehensive waitlist statistics in CSV format for time-series analysis.
+    Calculate one row of time-series metrics for a waitlist snapshot.
 
-    This function outputs 54 columns of data covering:
-    - Request counts by CIDR size
-    - Request churn (added/removed)
-    - Flexibility metrics
-    - Age distribution (total and by CIDR size)
-    - Wait time estimates based on historical clearance rates
+    Used by both live mode and history reprocessing so the two always agree.
 
     Args:
-        All parameters are metrics calculated from waitlist analysis
+        waitlist_data (list): Current waitlist snapshot (normalized)
+        previous_data (list): Previous snapshot for churn and fill detection, or None
+        snapshot_time (datetime): When the snapshot was taken
+        issued_df (DataFrame): Parsed issued blocks from parse_issued_blocks()
+        previous_row (dict): Previous CSV row (string values), or None. Supplies the
+            previous snapshot time and carries last-fill values forward between batches.
+
+    Returns:
+        dict: Metrics keyed by CSV_HEADER column names (values formatted for CSV output)
+    """
+    # === Churn and Flexibility ===
+    # Compare current vs previous to calculate churn and flexibility metrics
+    added_by_cidr, removed_by_cidr, added_total, removed_total, flexibility_stats, _ = compare_waitlists(waitlist_data, previous_data)
+
+    # Count requests by CIDR size (using maximumCidr as their preference)
+    waitlist_counts = Counter(str(item['maximumCidr']) for item in waitlist_data)
+
+    # Calculate age distribution (how long requests have been waiting)
+    age_dist = calculate_age_distribution(waitlist_data, snapshot_time)
+
+    # === Estimated Wait (forward-looking) ===
+    # A request joining now waits behind everything already in line
+    queue_24eq = calculate_queue_24eq(waitlist_data)
+    supply_rate = calculate_supply_rate(issued_df, snapshot_time)
+    estimated_wait_months = queue_24eq / supply_rate * 3 if supply_rate > 0 else float('inf')
+
+    # === Most Recent Fills (observed) ===
+    previous_time = parse_timestamp(previous_row['timestamp']) if previous_row and previous_row.get('timestamp') else None
+    fill_time, fill_waits = detect_filled_requests(waitlist_data, previous_data, snapshot_time, previous_time, issued_df)
+
+    row = {
+        'timestamp': format_timestamp(snapshot_time),
+        'total_requests': len(waitlist_data),
+        'added_total': added_total,
+        'removed_total': removed_total,
+        'net_change': added_total - removed_total,
+        'flexible_requests': flexibility_stats['flexible_requests'],
+        'exact_requests': flexibility_stats['exact_requests'],
+        'avg_flexibility': f"{flexibility_stats['avg_flexibility']:.2f}",
+        'queue_24eq': queue_24eq,
+        'supply_24eq_per_quarter': f'{supply_rate:.1f}',
+        'estimated_wait_months': f'{estimated_wait_months:.1f}' if estimated_wait_months != float('inf') else 'inf',
+    }
+
+    for size in ('22', '23', '24'):
+        row[f'requests_{size}'] = waitlist_counts.get(size, 0)
+        row[f'added_{size}'] = added_by_cidr.get(size, 0)
+        row[f'removed_{size}'] = removed_by_cidr.get(size, 0)
+
+    age_columns = {'0-3_months': '0_3mo', '3-6_months': '3_6mo', '6-12_months': '6_12mo',
+                   '12-24_months': '12_24mo', '24+_months': '24plus'}
+    for age_bin, column in age_columns.items():
+        for size in ('22', '23', '24'):
+            row[f'age_{column}_{size}'] = age_dist['bins_by_size'][age_bin][size]
+
+    # Carry the last observed fills forward until the next batch that fills that size
+    previous_row = previous_row or {}
+    for size in SIZES:
+        if size in fill_waits:
+            row[f'last_fill_date_{size}'] = fill_time.date().isoformat()
+            row[f'last_fill_wait_months_{size}'] = f'{fill_waits[size]:.1f}'
+        else:
+            row[f'last_fill_date_{size}'] = previous_row.get(f'last_fill_date_{size}', '')
+            row[f'last_fill_wait_months_{size}'] = previous_row.get(f'last_fill_wait_months_{size}', '')
+
+    return row
+
+def load_last_csv_row(csv_path):
+    """
+    Load the most recent row of the time-series CSV.
+
+    Args:
+        csv_path (str): Path to the time-series CSV
+
+    Returns:
+        dict: Last row keyed by column name, or None if the file is missing or empty
+    """
+    try:
+        with open(csv_path, 'r', encoding='utf-8', newline='') as f:
+            rows = list(csv.DictReader(f))
+    except FileNotFoundError:
+        return None
+    return rows[-1] if rows else None
+
+def write_issued_by_quarter(issued_df, output_file):
+    """
+    Write a per-quarter summary of issued address space for the dashboard.
+
+    Every quarter between the first and last issuance is included (empty quarters as
+    zero). Columns break issued space down by the size of block it came from.
+
+    Args:
+        issued_df (DataFrame): Parsed issued blocks from parse_issued_blocks()
+        output_file (str): Path to output CSV (e.g., 'docs/issued_by_quarter.csv')
+    """
+    quarters = issued_df['Date Reissued'].dt.to_period('Q')
+    all_quarters = pd.period_range(quarters.min(), quarters.max(), freq='Q')
+
+    with open(output_file, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['quarter', 'blocks_issued', 'eq24_total',
+                         'eq24_from_24', 'eq24_from_23', 'eq24_from_22', 'eq24_from_larger'])
+
+        for quarter in all_quarters:
+            blocks = issued_df[quarters == quarter]
+            eq24 = blocks.groupby('Prefix Size')['Size 24eq'].sum()
+            writer.writerow([
+                str(quarter),  # e.g. '2026Q3'
+                len(blocks),
+                int(blocks['Size 24eq'].sum()),
+                int(eq24.get(24, 0)),
+                int(eq24.get(23, 0)),
+                int(eq24.get(22, 0)),
+                int(eq24[eq24.index < 22].sum())  # /21 and larger, split to fill requests
+            ])
+
+def output_csv(row, include_header=True):
+    """
+    Output one row of waitlist statistics in CSV format for time-series analysis.
+
+    Args:
+        row (dict): Metrics from analyze_snapshot()
         include_header (bool): Whether to output CSV header row
 
     Output:
@@ -400,102 +756,11 @@ def output_csv(total_requests, requests_22, requests_23, requests_24,
 
     # Header row (optional)
     if include_header:
-        writer.writerow([
-            'timestamp',
-            'total_requests',
-            'requests_22',
-            'requests_23',
-            'requests_24',
-            'added_22',
-            'added_23',
-            'added_24',
-            'added_total',
-            'removed_22',
-            'removed_23',
-            'removed_24',
-            'removed_total',
-            'net_change',
-            'flexible_requests',
-            'exact_requests',
-            'avg_flexibility',
-            'age_0_3mo_22',
-            'age_0_3mo_23',
-            'age_0_3mo_24',
-            'age_3_6mo_22',
-            'age_3_6mo_23',
-            'age_3_6mo_24',
-            'age_6_12mo_22',
-            'age_6_12mo_23',
-            'age_6_12mo_24',
-            'age_12_24mo_22',
-            'age_12_24mo_23',
-            'age_12_24mo_24',
-            'age_24plus_22',
-            'age_24plus_23',
-            'age_24plus_24',
-            'avg_22_cleared_per_quarter',
-            'avg_23_cleared_per_quarter',
-            'avg_24_cleared_per_quarter',
-            'estimated_years_22',
-            'estimated_years_23',
-            'estimated_years_24'
-        ])
+        writer.writerow(CSV_HEADER)
 
-    # Use the waitlist data timestamp if available (from global scope), otherwise current time
-    # The global data_timestamp is set by main code after fetching/loading the waitlist
-    timestamp = data_timestamp if 'data_timestamp' in globals() and data_timestamp else datetime.now().isoformat()
+    writer.writerow([row[column] for column in CSV_HEADER])
 
-    # Calculate net change (positive = waitlist growing, negative = waitlist shrinking)
-    net_change = added_total - removed_total
-
-    # Data row - output all metrics in same order as header
-    # Note: Some values are formatted to specific decimal places for consistency
-    writer.writerow([
-        timestamp,
-        total_requests,
-        requests_22,
-        requests_23,
-        requests_24,
-        added_22,
-        added_23,
-        added_24,
-        added_total,
-        removed_22,
-        removed_23,
-        removed_24,
-        removed_total,
-        net_change,
-        flexible_requests,
-        exact_requests,
-        f'{avg_flexibility:.2f}',
-        age_0_3mo_22,
-        age_0_3mo_23,
-        age_0_3mo_24,
-        age_3_6mo_22,
-        age_3_6mo_23,
-        age_3_6mo_24,
-        age_6_12mo_22,
-        age_6_12mo_23,
-        age_6_12mo_24,
-        age_12_24mo_22,
-        age_12_24mo_23,
-        age_12_24mo_24,
-        age_24plus_22,
-        age_24plus_23,
-        age_24plus_24,
-        f'{avg_22_cleared:.1f}',
-        f'{avg_23_cleared:.1f}',
-        f'{avg_24_cleared:.1f}',
-        f'{years_22:.1f}' if years_22 != float('inf') else 'inf',
-        f'{years_23:.1f}' if years_23 != float('inf') else 'inf',
-        f'{years_24:.1f}' if years_24 != float('inf') else 'inf'
-    ])
-
-def output_text(total_requests, requests_22, requests_23, requests_24,
-                avg_22_cleared, avg_23_cleared, avg_24_cleared,
-                quarters_22, quarters_23, quarters_24, years_22, years_23, years_24,
-                added_22=0, added_23=0, added_24=0, added_total=0,
-                removed_22=0, removed_23=0, removed_24=0, removed_total=0):
+def output_text(row):
     """
     Output waitlist summary in human-readable Markdown format.
 
@@ -503,45 +768,43 @@ def output_text(total_requests, requests_22, requests_23, requests_24,
     a narrative summary of the waitlist status, changes, and estimated wait times.
 
     Args:
-        All parameters are metrics calculated from waitlist analysis
+        row (dict): Metrics from analyze_snapshot()
 
     Output:
         Prints formatted Markdown text to stdout
     """
     print("### Current Waitlist Summary ###")
-    print(f"As of the most recent data, the waitlist has **{total_requests} requests**.")
+    print(f"As of the most recent data, the waitlist has **{row['total_requests']} requests**.")
     print("The requests are for the following network sizes:")
-    print(f"* **/22:** {requests_22} requests")
-    print(f"* **/23:** {requests_23} requests")
-    print(f"* **/24:** {requests_24} requests")
+    print(f"* **/22:** {row['requests_22']} requests")
+    print(f"* **/23:** {row['requests_23']} requests")
+    print(f"* **/24:** {row['requests_24']} requests")
 
-    if added_total > 0 or removed_total > 0:
+    if row['added_total'] > 0 or row['removed_total'] > 0:
         print("\n" + "---")
         print("### Changes from Previous Snapshot ###")
-        print(f"* **Added:** {added_total} requests (/22: {added_22}, /23: {added_23}, /24: {added_24})")
-        print(f"* **Removed:** {removed_total} requests (/22: {removed_22}, /23: {removed_23}, /24: {removed_24})")
-        print(f"* **Net Change:** {added_total - removed_total:+d} requests")
+        print(f"* **Added:** {row['added_total']} requests (/22: {row['added_22']}, /23: {row['added_23']}, /24: {row['added_24']})")
+        print(f"* **Removed:** {row['removed_total']} requests (/22: {row['removed_22']}, /23: {row['removed_23']}, /24: {row['removed_24']})")
+        print(f"* **Net Change:** {row['net_change']:+d} requests")
 
-    print("\n" + "---")
-
-    print("### Historical Analysis ###")
-    print("Over the analyzed period, ARIN has cleared an average of:")
-    print(f"* **{avg_22_cleared:.1f}** /22 blocks per quarter")
-    print(f"* **{avg_23_cleared:.1f}** /23 blocks per quarter")
-    print(f"* **{avg_24_cleared:.1f}** /24 blocks per quarter")
     print("\n" + "---")
 
     print("### Estimated Wait Time ###")
-    print("Based on the current queue and historical rates, here are the estimated wait times:")
-    print(f"* **For a /22 network:**")
-    print(f"    * There are **{requests_22} requests** in the queue.")
-    print(f"    * At a rate of **{avg_22_cleared:.1f} blocks cleared per quarter**, the estimated wait time is approximately **{quarters_22} quarters**, or **{years_22:.1f} years**.")
-    print(f"* **For a /23 network:**")
-    print(f"    * There are **{requests_23} requests** in the queue.")
-    print(f"    * At a rate of **{avg_23_cleared:.1f} blocks cleared per quarter**, the estimated wait time is approximately **{quarters_23} quarters**, or **{years_23:.1f} years**.")
-    print(f"* **For a /24 network:**")
-    print(f"    * There are **{requests_24} requests** in the queue.")
-    print(f"    * At a rate of **{avg_24_cleared:.1f} blocks cleared per quarter**, the estimated wait time is approximately **{quarters_24} quarters**, or **{years_24:.1f} years**.")
+    print("Requests are filled first-come-first-served in roughly quarterly batches.")
+    print(f"* **{row['queue_24eq']} /24 equivalents** are waiting in line.")
+    print(f"* Over the last {SUPPLY_WINDOW_QUARTERS} quarters ARIN issued an average of "
+          f"**{row['supply_24eq_per_quarter']} /24 equivalents per quarter** (all block sizes).")
+    print(f"* A request joining now would wait approximately **{row['estimated_wait_months']} months**.")
+
+    if any(row[f'last_fill_date_{size}'] for size in SIZES):
+        print("\n" + "---")
+        print("### Most Recent Fills ###")
+        print("In the most recent batch that filled each size, the newest request filled had waited:")
+        for size in SIZES:
+            if row[f'last_fill_date_{size}']:
+                print(f"* **/{size}:** {row[f'last_fill_wait_months_{size}']} months (batch of {row[f'last_fill_date_{size}']})")
+            else:
+                print(f"* **/{size}:** no fills observed yet")
 
 def get_git_commits_for_file(file_path):
     """
@@ -595,7 +858,10 @@ def get_file_at_commit(commit_hash, file_path):
 
 def get_commit_date(commit_hash):
     """
-    Get the commit date in ISO format for a given commit hash.
+    Get the author date in ISO format for a given commit hash.
+
+    The author date is when the snapshot was taken; the committer date changes
+    when history is rebased.
 
     Args:
         commit_hash (str): Git commit hash
@@ -605,7 +871,7 @@ def get_commit_date(commit_hash):
     """
     try:
         result = subprocess.run(
-            ['git', 'show', '-s', '--format=%cI', commit_hash],
+            ['git', 'show', '-s', '--format=%aI', commit_hash],
             capture_output=True,
             text=True,
             check=True
@@ -629,16 +895,17 @@ def reprocess_git_history(output_file):
         output_file (str): Path to output CSV file (e.g., 'docs/waitlist_data.csv')
 
     Process:
-        1. Find all commits that modified waitlist_data.json (in chronological order)
-        2. For each commit:
+        1. Find all commits that modified waitlist_data.json and sort them by snapshot time
+        2. For each commit with a changed snapshot:
            - Extract waitlist JSON at that commit
-           - Calculate all metrics (counts, churn, flexibility, age distribution)
+           - Calculate all metrics (counts, churn, flexibility, age distribution, wait times)
            - Write CSV row with commit timestamp
-        3. Result: Complete time-series CSV with one row per commit
+        3. Result: Complete time-series CSV with one row per snapshot, plus the
+           issued-by-quarter summary next to it
     """
     print("Reprocessing git history...", file=sys.stderr)
 
-    # Get all commits for waitlist_data.json in chronological order
+    # Get all commits for waitlist_data.json
     commits = get_git_commits_for_file('data/waitlist_data.json')
 
     if not commits:
@@ -647,73 +914,46 @@ def reprocess_git_history(output_file):
 
     print(f"Found {len(commits)} commits to process", file=sys.stderr)
 
+    # Fetch issued blocks once; each snapshot only uses blocks issued before its timestamp
+    try:
+        issued_text = fetch_issued_blocks()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching historical data CSV: {e}; using data/historical_data.csv", file=sys.stderr)
+        with open('data/historical_data.csv', 'r', encoding='utf-8') as f:
+            issued_text = f.read()
+    issued_df = parse_issued_blocks(issued_text)
+
+    # Order snapshots by when they were taken (author date)
+    dated_commits = []
+    for commit in commits:
+        commit_date = get_commit_date(commit)
+        if not commit_date:
+            print(f"  Could not get date for commit {commit[:8]}, skipping", file=sys.stderr)
+            continue
+        dated_commits.append((parse_timestamp(commit_date), commit))
+    dated_commits.sort()
+
     # Create output directory if needed (e.g., 'docs/')
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     # Open output file
-    with open(output_file, 'w', encoding='utf-8') as csvfile:
+    with open(output_file, 'w', encoding='utf-8', newline='') as csvfile:
         writer = csv.writer(csvfile)
+        writer.writerow(CSV_HEADER)
 
-        # Write header
-        writer.writerow([
-            'timestamp',
-            'total_requests',
-            'requests_22',
-            'requests_23',
-            'requests_24',
-            'added_22',
-            'added_23',
-            'added_24',
-            'added_total',
-            'removed_22',
-            'removed_23',
-            'removed_24',
-            'removed_total',
-            'net_change',
-            'flexible_requests',
-            'exact_requests',
-            'avg_flexibility',
-            'age_0_3mo_22',
-            'age_0_3mo_23',
-            'age_0_3mo_24',
-            'age_3_6mo_22',
-            'age_3_6mo_23',
-            'age_3_6mo_24',
-            'age_6_12mo_22',
-            'age_6_12mo_23',
-            'age_6_12mo_24',
-            'age_12_24mo_22',
-            'age_12_24mo_23',
-            'age_12_24mo_24',
-            'age_24plus_22',
-            'age_24plus_23',
-            'age_24plus_24',
-            'avg_22_cleared_per_quarter',
-            'avg_23_cleared_per_quarter',
-            'avg_24_cleared_per_quarter',
-            'estimated_years_22',
-            'estimated_years_23',
-            'estimated_years_24'
-        ])
-
-        # Track previous snapshot for calculating churn (added/removed requests)
+        # Track previous snapshot for churn and fill detection
         previous_data = None
+        previous_row = None
 
         # === Main Processing Loop ===
         # Process each commit in chronological order to build time-series data
-        for i, commit in enumerate(commits):
-            print(f"Processing commit {i+1}/{len(commits)}: {commit[:8]}", file=sys.stderr)
+        for i, (snapshot_time, commit) in enumerate(dated_commits):
+            print(f"Processing commit {i+1}/{len(dated_commits)}: {commit[:8]}", file=sys.stderr)
 
             # Extract waitlist_data.json content at this specific commit
             content = get_file_at_commit(commit, 'data/waitlist_data.json')
             if not content:
                 print(f"  Could not get file at commit {commit[:8]}, skipping", file=sys.stderr)
-                continue
-
-            # Get the commit timestamp (used as snapshot timestamp)
-            commit_date = get_commit_date(commit)
-            if not commit_date:
-                print(f"  Could not get date for commit {commit[:8]}, skipping", file=sys.stderr)
                 continue
 
             # Parse the JSON waitlist data from this commit
@@ -723,127 +963,19 @@ def reprocess_git_history(output_file):
                 print(f"  Error parsing JSON at commit {commit[:8]}: {e}", file=sys.stderr)
                 continue
 
-            # === Calculate Metrics ===
+            # Skip commits that didn't change the snapshot (e.g., reformatting)
+            if waitlist_data == previous_data:
+                print(f"  Snapshot unchanged at commit {commit[:8]}, skipping", file=sys.stderr)
+                continue
 
-            # Compare with previous snapshot to calculate request churn
-            added_by_cidr, removed_by_cidr, added_total, removed_total, flexibility_stats, size_change_stats = compare_waitlists(waitlist_data, previous_data)
-
-            # Count total requests and requests by CIDR size
-            requests_list = [str(item['maximumCidr']) for item in waitlist_data if 'maximumCidr' in item]
-            waitlist_counts = Counter(requests_list)
-
-            requests_22 = waitlist_counts.get('22', 0)
-            requests_23 = waitlist_counts.get('23', 0)
-            requests_24 = waitlist_counts.get('24', 0)
-            total_requests = len(waitlist_data)
-
-            # Extract added counts by CIDR size
-            added_22 = added_by_cidr.get('22', 0)
-            added_23 = added_by_cidr.get('23', 0)
-            added_24 = added_by_cidr.get('24', 0)
-
-            # Extract removed counts by CIDR size
-            removed_22 = removed_by_cidr.get('22', 0)
-            removed_23 = removed_by_cidr.get('23', 0)
-            removed_24 = removed_by_cidr.get('24', 0)
-
-            # === Historical Clearance Rate Analysis ===
-            # Fetch historical data to calculate wait time estimates
-            # NOTE: We fetch this for every commit (could be optimized to fetch once)
-            try:
-                # Fetch the historical cleared blocks CSV from ARIN
-                response = requests.get(HISTORICAL_DATA_URL, timeout=10)
-                response.raise_for_status()
-
-                csv_file = io.StringIO(response.text)
-                historical_df = pd.read_csv(csv_file)
-                # Clean column names (remove whitespace)
-                historical_df.columns = historical_df.columns.str.strip()
-                # Extract CIDR size from 'CIDR Prefix' column (e.g., '192.0.2.0/24' -> 24)
-                historical_df['Prefix Size'] = historical_df['CIDR Prefix'].apply(lambda x: int(x.split('/')[1]))
-                # Parse dates in ARIN's format (MM/DD/YY)
-                historical_df['Date Reissued'] = pd.to_datetime(historical_df['Date Reissued'], format='%m/%d/%y')
-
-                # === Critical: Apply timestamp cutoff ===
-                # Only include cleared blocks BEFORE this commit's timestamp
-                # This ensures historical accuracy - we only count blocks that had been cleared by that point in time
-                cutoff_date = pd.to_datetime(commit_date).tz_localize(None)
-                historical_df = historical_df[historical_df['Date Reissued'] <= cutoff_date]
-
-                # Calculate average clearance rates per quarter by CIDR size
-                quarterly_counts = historical_df.groupby([pd.Grouper(key='Date Reissued', freq='QE'), 'Prefix Size']).size().unstack(fill_value=0)
-                avg_cleared_per_quarter = quarterly_counts.mean()
-                avg_22_cleared = avg_cleared_per_quarter.get(22, 0)
-                avg_23_cleared = avg_cleared_per_quarter.get(23, 0)
-                avg_24_cleared = avg_cleared_per_quarter.get(24, 0)
-
-            except Exception as e:
-                print(f"  Error fetching historical data: {e}", file=sys.stderr)
-                # Fallback to zero if historical data unavailable
-                avg_22_cleared = avg_23_cleared = avg_24_cleared = 0
-
-            # Calculate estimated wait times based on queue size and clearance rate
-            # Use ceil() because partial quarters still mean waiting for the full quarter
-            quarters_22 = math.ceil(requests_22 / avg_22_cleared) if avg_22_cleared > 0 else float('inf')
-            quarters_23 = math.ceil(requests_23 / avg_23_cleared) if avg_23_cleared > 0 else float('inf')
-            quarters_24 = math.ceil(requests_24 / avg_24_cleared) if avg_24_cleared > 0 else float('inf')
-
-            # Convert quarters to years for easier interpretation
-            years_22 = quarters_22 / 4
-            years_23 = quarters_23 / 4
-            years_24 = quarters_24 / 4
-
-            # Calculate age distribution using commit date as reference time
-            # This gives us historically accurate ages (how old requests were at this snapshot)
-            age_dist = calculate_age_distribution(waitlist_data, commit_date)
-
-            # === Write CSV Row ===
-            # Write all calculated metrics for this commit as one CSV row
-            net_change = added_total - removed_total
-            writer.writerow([
-                commit_date,
-                total_requests,
-                requests_22,
-                requests_23,
-                requests_24,
-                added_22,
-                added_23,
-                added_24,
-                added_total,
-                removed_22,
-                removed_23,
-                removed_24,
-                removed_total,
-                net_change,
-                flexibility_stats['flexible_requests'],
-                flexibility_stats['exact_requests'],
-                f"{flexibility_stats['avg_flexibility']:.2f}",
-                age_dist['bins_by_size']['0-3_months']['22'],
-                age_dist['bins_by_size']['0-3_months']['23'],
-                age_dist['bins_by_size']['0-3_months']['24'],
-                age_dist['bins_by_size']['3-6_months']['22'],
-                age_dist['bins_by_size']['3-6_months']['23'],
-                age_dist['bins_by_size']['3-6_months']['24'],
-                age_dist['bins_by_size']['6-12_months']['22'],
-                age_dist['bins_by_size']['6-12_months']['23'],
-                age_dist['bins_by_size']['6-12_months']['24'],
-                age_dist['bins_by_size']['12-24_months']['22'],
-                age_dist['bins_by_size']['12-24_months']['23'],
-                age_dist['bins_by_size']['12-24_months']['24'],
-                age_dist['bins_by_size']['24+_months']['22'],
-                age_dist['bins_by_size']['24+_months']['23'],
-                age_dist['bins_by_size']['24+_months']['24'],
-                f'{avg_22_cleared:.1f}',
-                f'{avg_23_cleared:.1f}',
-                f'{avg_24_cleared:.1f}',
-                f'{years_22:.1f}' if years_22 != float('inf') else 'inf',
-                f'{years_23:.1f}' if years_23 != float('inf') else 'inf',
-                f'{years_24:.1f}' if years_24 != float('inf') else 'inf'
-            ])
+            row = analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, previous_row)
+            writer.writerow([row[column] for column in CSV_HEADER])
 
             # Store this snapshot as "previous" for the next iteration
-            # This enables churn calculation between consecutive commits
             previous_data = waitlist_data
+            previous_row = {column: str(value) for column, value in row.items()}
+
+    write_issued_by_quarter(issued_df, os.path.join(os.path.dirname(output_file), 'issued_by_quarter.csv'))
 
     print(f"Reprocessing complete! Output written to {output_file}", file=sys.stderr)
 
@@ -866,35 +998,19 @@ if args.reprocess_history:
 # Create data directory if it doesn't exist (for caching files)
 os.makedirs('data', exist_ok=True)
 
-# --- Step 1: Fetch and Analyze Historical Cleared Blocks Data ---
-# This data is used to calculate average clearance rates and estimate wait times
+# --- Step 1: Fetch Historical Issued Blocks Data ---
+# This data is used to measure supply (address space issued per quarter)
 
 try:
-    # Fetch the historical cleared blocks CSV from ARIN
+    # Fetch the issued blocks CSV from ARIN
     # This contains all IPv4 blocks that have been issued from the waitlist
-    response = requests.get(HISTORICAL_DATA_URL, timeout=10)
-    response.raise_for_status()  # Raise exception for HTTP errors (4xx or 5xx)
+    issued_text = fetch_issued_blocks()
 
     # Save a local copy of the historical data for reference
     with open('data/historical_data.csv', 'w', encoding='utf-8') as f:
-        f.write(response.text)
+        f.write(issued_text)
 
-    # Parse CSV into pandas DataFrame for analysis
-    csv_file = io.StringIO(response.text)
-    historical_df = pd.read_csv(csv_file)
-
-    # Clean up column names (remove leading/trailing whitespace)
-    historical_df.columns = historical_df.columns.str.strip()
-
-    # Extract CIDR size from the 'CIDR Prefix' column
-    # Example: '192.0.2.0/24' -> 24
-    historical_df['Prefix Size'] = historical_df['CIDR Prefix'].apply(lambda x: int(x.split('/')[1]))
-
-    # Convert 'Date Reissued' string to datetime objects for time-series analysis
-    # ARIN uses MM/DD/YY format
-    historical_df['Date Reissued'] = pd.to_datetime(historical_df['Date Reissued'], format='%m/%d/%y')
-
-    # Note: historical_df will be filtered by timestamp cutoff later (after we get waitlist timestamp)
+    issued_df = parse_issued_blocks(issued_text)
 
 except requests.exceptions.RequestException as e:
     print(f"Error fetching historical data CSV: {e}", file=sys.stderr)
@@ -912,6 +1028,10 @@ try:
         # Load waitlist from local JSON file (for historical analysis or testing)
         waitlist_data, data_timestamp = load_waitlist_data(args.file)
 
+        # Use the newest request as the snapshot time; no history to carry forward
+        snapshot_time = parse_timestamp(data_timestamp)
+        previous_row = None
+
         # Save a standardized copy to data/waitlist_data.json
         with open('data/waitlist_data.json', 'w', encoding='utf-8') as f:
             json.dump(waitlist_data, f, indent=2)
@@ -920,46 +1040,27 @@ try:
         # Fetch the current waitlist JSON from ARIN's public API
         response = requests.get(CURRENT_WAITLIST_URL, timeout=10)
         response.raise_for_status()  # Raise exception for HTTP errors
+        snapshot_time = datetime.now(timezone.utc)
 
         # Save the fetched data to local file for tracking in git
         with open('data/waitlist_data.json', 'w', encoding='utf-8') as f:
             json.dump(json.loads(response.text), f, indent=2)
 
-        # Parse the JSON to extract normalized data and timestamp
-        waitlist_data, data_timestamp = parse_waitlist_json(response.text)
+        # Parse the JSON to extract normalized data
+        waitlist_data, _ = parse_waitlist_json(response.text)
+
+        # The previous time-series row supplies the previous snapshot time and the
+        # last observed fills to carry forward
+        previous_row = load_last_csv_row(args.output_csv)
 
     # === Load Previous Snapshot (if provided) ===
-    # This enables churn tracking (added/removed requests)
+    # This enables churn tracking (added/removed requests) and fill detection
     previous_data = None
     if args.previous_file:
         previous_data, _ = load_waitlist_data(args.previous_file)
 
     # === Calculate Metrics ===
-
-    # Compare current vs previous to calculate churn and flexibility metrics
-    added_by_cidr, removed_by_cidr, added_total, removed_total, flexibility_stats, size_change_stats = compare_waitlists(waitlist_data, previous_data)
-
-    # Count requests by CIDR size (using maximumCidr as their preference)
-    requests_list = [str(item['maximumCidr']) for item in waitlist_data if 'maximumCidr' in item]
-    waitlist_counts = Counter(requests_list)
-
-    requests_22 = waitlist_counts.get('22', 0)
-    requests_23 = waitlist_counts.get('23', 0)
-    requests_24 = waitlist_counts.get('24', 0)
-    total_requests = len(waitlist_data)
-
-    # Extract added counts by CIDR size
-    added_22 = added_by_cidr.get('22', 0)
-    added_23 = added_by_cidr.get('23', 0)
-    added_24 = added_by_cidr.get('24', 0)
-
-    # Extract removed counts by CIDR size
-    removed_22 = removed_by_cidr.get('22', 0)
-    removed_23 = removed_by_cidr.get('23', 0)
-    removed_24 = removed_by_cidr.get('24', 0)
-
-    # Calculate age distribution (how long requests have been waiting)
-    age_dist = calculate_age_distribution(waitlist_data, data_timestamp)
+    row = analyze_snapshot(waitlist_data, previous_data, snapshot_time, issued_df, previous_row)
 
 except requests.exceptions.RequestException as e:
     print(f"Error fetching waitlist JSON: {e}", file=sys.stderr)
@@ -974,96 +1075,20 @@ except Exception as e:
     print(f"An error occurred while processing the waitlist: {e}", file=sys.stderr)
     sys.exit(1)
 
-# --- Step 3: Calculate Historical Clearance Rates ---
-# Process the historical cleared blocks data to calculate average clearance rates
+# --- Step 3: Update Issued Space Summary ---
+# Per-quarter supply used by the dashboard (live mode only, alongside the time-series CSV)
+if not args.file:
+    write_issued_by_quarter(issued_df, os.path.join(os.path.dirname(args.output_csv), 'issued_by_quarter.csv'))
 
-# === Apply Timestamp Cutoff (for historical accuracy) ===
-# When processing historical snapshots, only count blocks cleared BEFORE the snapshot time
-if args.file and data_timestamp:
-    # Convert waitlist timestamp to pandas datetime (remove timezone for comparison)
-    cutoff_date = pd.to_datetime(data_timestamp).tz_localize(None)
-    print(f"Using timestamp cutoff: {cutoff_date}", file=sys.stderr)
-
-    # Filter historical data to only include blocks cleared before the snapshot
-    # This ensures wait time estimates are accurate for that point in time
-    historical_df = historical_df[historical_df['Date Reissued'] <= cutoff_date]
-
-# Group cleared blocks by quarter and CIDR size, then count occurrences
-# This creates a time-series of clearance counts by size
-quarterly_counts = historical_df.groupby([pd.Grouper(key='Date Reissued', freq='QE'), 'Prefix Size']).size().unstack(fill_value=0)
-
-# Calculate average number of blocks cleared per quarter for each size
-# This is the historical clearance rate used for wait time estimation
-avg_cleared_per_quarter = quarterly_counts.mean()
-avg_22_cleared = avg_cleared_per_quarter.get(22, 0)
-avg_23_cleared = avg_cleared_per_quarter.get(23, 0)
-avg_24_cleared = avg_cleared_per_quarter.get(24, 0)
-
-# --- Step 4: Calculate Estimated Wait Times ---
-# Estimate how long current requests will wait based on queue size and clearance rate
-
-# Calculate estimated quarters to clear the entire queue for each size
-# Formula: queue_size / clearance_rate
-# Use ceil() because partial quarters round up to full waiting periods
-quarters_22 = math.ceil(requests_22 / avg_22_cleared) if avg_22_cleared > 0 else float('inf')
-quarters_23 = math.ceil(requests_23 / avg_23_cleared) if avg_23_cleared > 0 else float('inf')
-quarters_24 = math.ceil(requests_24 / avg_24_cleared) if avg_24_cleared > 0 else float('inf')
-
-# Convert quarters to years for easier interpretation (4 quarters = 1 year)
-years_22 = quarters_22 / 4
-years_23 = quarters_23 / 4
-years_24 = quarters_24 / 4
-
-
-# --- Step 5: Output Results ---
+# --- Step 4: Output Results ---
 # Output all calculated metrics in the requested format (CSV or human-readable text)
 
 # Choose output format based on --csv flag
 if args.csv:
     # === CSV Output Mode ===
     # Output one row of time-series data for appending to tracking CSV
-    output_csv(total_requests, requests_22, requests_23, requests_24,
-               avg_22_cleared, avg_23_cleared, avg_24_cleared,
-               quarters_22, quarters_23, quarters_24, years_22, years_23, years_24,
-               added_22, added_23, added_24, added_total,
-               removed_22, removed_23, removed_24, removed_total,
-               flexibility_stats['flexible_requests'],
-               flexibility_stats['exact_requests'],
-               flexibility_stats['avg_flexibility'],
-               size_change_stats['size_changes'],
-               size_change_stats['upsize_changes'],
-               size_change_stats['downsize_changes'],
-               size_change_stats['flexibility_changes'],
-               age_dist['bins']['0-3_months'],
-               age_dist['bins']['3-6_months'],
-               age_dist['bins']['6-12_months'],
-               age_dist['bins']['12-24_months'],
-               age_dist['bins']['24+_months'],
-               age_dist['avg_age_days'],
-               age_dist['median_age_days'],
-               age_dist['min_age_days'],
-               age_dist['max_age_days'],
-               age_dist['bins_by_size']['0-3_months']['22'],
-               age_dist['bins_by_size']['0-3_months']['23'],
-               age_dist['bins_by_size']['0-3_months']['24'],
-               age_dist['bins_by_size']['3-6_months']['22'],
-               age_dist['bins_by_size']['3-6_months']['23'],
-               age_dist['bins_by_size']['3-6_months']['24'],
-               age_dist['bins_by_size']['6-12_months']['22'],
-               age_dist['bins_by_size']['6-12_months']['23'],
-               age_dist['bins_by_size']['6-12_months']['24'],
-               age_dist['bins_by_size']['12-24_months']['22'],
-               age_dist['bins_by_size']['12-24_months']['23'],
-               age_dist['bins_by_size']['12-24_months']['24'],
-               age_dist['bins_by_size']['24+_months']['22'],
-               age_dist['bins_by_size']['24+_months']['23'],
-               age_dist['bins_by_size']['24+_months']['24'],
-               include_header=not args.no_header)
+    output_csv(row, include_header=not args.no_header)
 else:
     # === Human-Readable Text Output Mode (default) ===
     # Output formatted Markdown summary for human consumption
-    output_text(total_requests, requests_22, requests_23, requests_24,
-                avg_22_cleared, avg_23_cleared, avg_24_cleared,
-                quarters_22, quarters_23, quarters_24, years_22, years_23, years_24,
-                added_22, added_23, added_24, added_total,
-                removed_22, removed_23, removed_24, removed_total)
+    output_text(row)
