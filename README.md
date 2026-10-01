@@ -12,13 +12,13 @@ Analyzes ARIN's IPv4 waiting list and estimates wait times based on the address 
 ## Features
 
 - **Waitlist Tracking**: Fetches current waitlist data from ARIN's public API
-- **Wait Time Estimates**: Estimates the wait for a new request from its place in line and the address space ARIN issues per quarter
+- **Wait Time Estimates**: Estimates the wait for a new /22, /23 or /24 request by simulating how ARIN fills the line with the blocks it issues
 - **Observed Waits**: Detects each issuance batch and records how long the most recently filled requests actually waited
 - **Request Churn Tracking**: Monitors added/removed requests between snapshots
 - **Flexibility Analysis**: Tracks how many requesters are willing to accept different block sizes
 - **Age Distribution**: Analyzes how long requests have been waiting, broken down by CIDR size
 - **Git History Integration**: Uses git commits to track waitlist changes over time
-- **Time-Series Data**: Exports comprehensive CSV data (41 columns) for analysis
+- **Time-Series Data**: Exports comprehensive CSV data (43 columns) for analysis
 - **Interactive Dashboard**: Web-based visualizations with 9 charts:
   - Waitlist size over time
   - Estimated vs observed wait time (months)
@@ -64,25 +64,34 @@ python process.py --reprocess-history --output-csv docs/waitlist_data.csv
 
 ## How Wait Times Are Estimated
 
-ARIN fills the waitlist first-come-first-served (by `waitListActionDate`) in roughly quarterly batches.
-Its [issued blocks list](https://www.arin.net/resources/guide/ipv4/blocks_cleared/) includes large blocks
-(/15–/21) that are split to fill many /22–/24 requests, so supply is measured as address space in
-/24 equivalents (/22 = 4, /16 = 256) across all block sizes, not by counting /22–/24 rows.
+ARIN fills the waitlist first-come-first-served (by `waitListActionDate`) in roughly quarterly batches,
+["subject to the size of each available address block"](https://www.arin.net/participate/policy/nrpm/#4-1-8-2-fulfillment),
+and never partially. A /22 request needs a block that can hold a /22; several /24 blocks can't be combined.
+ARIN's [issued blocks list](https://www.arin.net/resources/guide/ipv4/blocks_cleared/) includes large
+blocks (/15–/21) that are split to fill many /22–/24 requests, so the model works from the actual blocks
+issued rather than counting /22–/24 rows.
 
-- **Estimated wait (joining now)** = /24 equivalents already waiting ÷ average /24 equivalents issued
-  per quarter over the last 8 quarters (quarters with no issuance count as zero).
+- **Estimated wait (joining now)**, per size: the blocks ARIN issued in each of the last 8 quarters
+  (quarters with no issuance count as empty) are replayed as future quarterly batches over the current
+  line. Each simulated batch fills requests in line order, giving each the largest size it accepts that
+  a remaining block can hold (splitting larger blocks) and skipping requests nothing fits. A new request
+  at the back of the line is filled in the first batch with a suitable block left over. The replay starts
+  from each of the 8 quarters in turn and the waits are averaged.
+  On the 2025–2026 batches this simulation reproduces 85–99% of the requests ARIN actually filled,
+  including the July 2026 batch where mostly-/24 blocks let /24 requests jump months ahead of /22s.
 - **Most recent fills** = for each block size, how long the newest request filled in the latest batch
   had waited. Batches are detected from snapshot diffs (10+ removals); a request counts as filled when
   at least 8 of the 10 same-size requests up to it in line were removed, which ignores withdrawals and
   requests stuck at the front of the line.
 
-The estimate assumes future batches match the recent average, and batch sizes vary a lot
-(165 to 1,471 /24 equivalents per batch over 2025–2026), so treat it as a rough guide and compare it
-with the observed waits.
+The estimate assumes future batches look like the last two years, and batches vary a lot (165 to 1,471
+/24 equivalents over 2025–2026, sometimes mostly /24 blocks), so treat it as a rough guide and compare it
+with the observed waits. Requests that ARIN skips for review stay in the simulated line, so estimates
+lean slightly long.
 
 ## Output Files
 
-- `docs/waitlist_data.csv` - Time-series data for dashboard (41 columns including counts, churn, flexibility, age distribution, wait times)
+- `docs/waitlist_data.csv` - Time-series data for dashboard (43 columns including counts, churn, flexibility, age distribution, wait times)
 - `docs/issued_by_quarter.csv` - Address space issued per quarter by source block size
 - `data/waitlist_data.json` - Current waitlist snapshot (tracked in git)
 - `data/historical_data.csv` - Historical issued blocks data (cached from ARIN)
@@ -124,14 +133,14 @@ Manual runs available via workflow dispatch.
 
 ## Data Columns
 
-The CSV file contains 41 columns tracking:
+The CSV file contains 43 columns tracking:
 
 - **Basic Counts**: Total requests and breakdown by CIDR size (/22, /23, /24)
 - **Churn Metrics**: Added/removed requests by size, net change
 - **Flexibility**: Exact vs flexible requests, average flexibility
 - **Age by Size**: Age distribution broken down by CIDR size across 5 age ranges (0-3mo, 3-6mo, 6-12mo, 12-24mo, 24+mo)
 - **Supply and Queue**: /24 equivalents waiting and average /24 equivalents issued per quarter
-- **Wait Times**: Estimated wait (months) for a request joining now, and the date and wait of the most recent fill by size
+- **Wait Times**: Estimated wait (months) for a new request of each size, and the date and wait of the most recent fill by size
 
 ## Requirements
 

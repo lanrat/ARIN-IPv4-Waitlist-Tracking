@@ -5,3 +5,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # Keep Python dependencies up to date, grouped into one monthly PR
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"

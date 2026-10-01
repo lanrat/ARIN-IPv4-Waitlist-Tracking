@@ -333,8 +333,8 @@ function columnPoints(data, column) {
 /**
  * Create Wait Time Chart
  *
- * Shows the estimated wait for a request joining at each snapshot alongside
- * how long the newest request filled in each batch actually waited (by size).
+ * Shows the estimated wait for a new request of each size at each snapshot alongside
+ * how long the newest request of that size filled in each batch actually waited.
  *
  * @param {string} canvasId - Canvas element ID
  * @param {string} title - Chart title
@@ -343,22 +343,27 @@ function columnPoints(data, column) {
  */
 function createWaitTimeChart(canvasId, title, data) {
     try {
-        const datasets = [{
-            label: 'Estimated wait (joining now)',
-            data: columnPoints(data, 'estimated_wait_months'),
-            borderColor: '#ffa500',
-            backgroundColor: '#ffa500' + '20',
-            borderWidth: 3,
-            tension: 0.1
-        }];
+        const datasets = [];
 
-        // Observed waits only change when a batch is filled, so draw them as steps
         Object.keys(colors).forEach(size => {
+            // Estimated wait for a new request of this size
+            datasets.push({
+                label: `Estimated ${size}`,
+                data: columnPoints(data, `estimated_wait_months_${size.slice(1)}`),
+                borderColor: colors[size],
+                backgroundColor: colors[size] + '20',
+                borderWidth: 3,
+                tension: 0.1
+            });
+
+            // Observed waits only change when a batch is filled, so draw them as steps
             datasets.push({
                 label: `Last ${size} fill waited`,
                 data: columnPoints(data, `last_fill_wait_months_${size.slice(1)}`),
                 borderColor: colors[size],
                 backgroundColor: colors[size] + '20',
+                borderDash: [6, 4],
+                pointRadius: 0,
                 stepped: true
             });
         });
@@ -374,7 +379,7 @@ function createWaitTimeChart(canvasId, title, data) {
  * Create Waiting vs Issued Chart
  *
  * Compares address space waiting in line with the average issued per quarter.
- * The ratio of the two is the estimated wait in quarters.
+ * The ratio of the two is roughly how many quarterly batches it takes to clear the line.
  *
  * @param {string} canvasId - Canvas element ID
  * @param {string} title - Chart title
@@ -569,9 +574,10 @@ function updateStatistics(data) {
         const req24 = parseInt(latest.requests_24) || 0;
         const totalReq = parseInt(latest.total_requests) || 0;
 
-        // Estimated wait for a request joining now (queue / supply, in /24 equivalents)
-        const estimatedWait = parseFloat(latest.estimated_wait_months);
-        const queue24eq = parseInt(latest.queue_24eq) || 0;
+        // Estimated wait for a new request of each size (simulated future batches)
+        const estimatedWait22 = parseFloat(latest.estimated_wait_months_22);
+        const estimatedWait23 = parseFloat(latest.estimated_wait_months_23);
+        const estimatedWait24 = parseFloat(latest.estimated_wait_months_24);
         const supply24eq = parseFloat(latest.supply_24eq_per_quarter) || 0;
 
         // How long the newest request filled in the latest batch had waited, by size
@@ -584,10 +590,10 @@ function updateStatistics(data) {
         const totalIPs = (req22 * 1024) + (req23 * 512) + (req24 * 256);
         const totalRequests = req22 + req23 + req24;
 
-        // Block efficiency calculations (IPs per year waited, from the most recent fills)
-        const eff22 = calculateBlockEfficiency(1024, lastFillWait22 / 12);
-        const eff23 = calculateBlockEfficiency(512, lastFillWait23 / 12);
-        const eff24 = calculateBlockEfficiency(256, lastFillWait24 / 12);
+        // Block efficiency calculations (IPs per year of estimated wait)
+        const eff22 = calculateBlockEfficiency(1024, estimatedWait22 / 12);
+        const eff23 = calculateBlockEfficiency(512, estimatedWait23 / 12);
+        const eff24 = calculateBlockEfficiency(256, estimatedWait24 / 12);
 
         const efficiencies = [
             { type: '/22', efficiency: eff22, ips: 1024 },
@@ -665,11 +671,10 @@ function updateStatistics(data) {
         document.getElementById('total-requests').textContent = formatNumber(totalReq);
 
         // Update estimated wait
-        document.getElementById('estimated-wait').textContent = formatMonths(estimatedWait);
-        document.getElementById('queue-24eq').textContent = formatNumber(queue24eq);
+        document.getElementById('estimated-wait-22').textContent = formatMonths(estimatedWait22);
+        document.getElementById('estimated-wait-23').textContent = formatMonths(estimatedWait23);
+        document.getElementById('estimated-wait-24').textContent = formatMonths(estimatedWait24);
         document.getElementById('supply-24eq').textContent = formatNumber(supply24eq);
-        document.getElementById('batches-to-clear').textContent =
-            supply24eq > 0 ? (queue24eq / supply24eq).toFixed(1) : '∞';
 
         // Update most recent fills (a size not filled in the latest batch shows its own batch date)
         const lastFillDates = [latest.last_fill_date_22, latest.last_fill_date_23, latest.last_fill_date_24]

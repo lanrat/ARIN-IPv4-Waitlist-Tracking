@@ -225,20 +225,20 @@
             <div class="stat-card">
                 <h3>Estimated Wait (Joining Now)</h3>
                 <div class="stat-item">
-                    <span class="stat-label">Estimated wait:</span>
-                    <span class="stat-value" id="estimated-wait">-</span>
+                    <span class="stat-label">/22 request:</span>
+                    <span class="stat-value" id="estimated-wait-22">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Waiting (/24 equivalents):</span>
-                    <span class="stat-value" id="queue-24eq">-</span>
+                    <span class="stat-label">/23 request:</span>
+                    <span class="stat-value" id="estimated-wait-23">-</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Issued per quarter (2-yr avg):</span>
+                    <span class="stat-label">/24 request:</span>
+                    <span class="stat-value" id="estimated-wait-24">-</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Issued per quarter (/24 eq, 2-yr avg):</span>
                     <span class="stat-value" id="supply-24eq">-</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Quarterly batches to clear:</span>
-                    <span class="stat-value" id="batches-to-clear">-</span>
                 </div>
             </div>
 
@@ -384,10 +384,11 @@
         <div class="chart-container">
             <h2>Wait Time (Months)</h2>
             <p class="chart-note">
-                Requests are filled first-come-first-served in roughly quarterly batches.
-                The estimate is the address space already waiting divided by the average
-                address space ARIN issued per quarter over the last two years.
-                The step lines show how long the newest request filled in each batch had actually waited.
+                Requests are filled first-come-first-served in roughly quarterly batches, but only
+                when a block of the right size is available (several /24s can't be combined into a /22).
+                Estimates (solid) simulate future batches by replaying the blocks ARIN issued over the
+                last two years against the current line. Dashed steps show how long the newest request
+                filled in each batch actually waited.
             </p>
             <div class="chart-wrapper">
                 <canvas id="waitTimeChart"></canvas>
