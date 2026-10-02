@@ -1504,7 +1504,37 @@ async function loadData() {
         // Update statistics cards with latest values
         updateStatistics(data);
 
-        // === Create All Charts ===
+        // Create all charts, and rebuild them when the system color scheme changes
+        // (chart text and grid colors are fixed when a chart is created)
+        renderCharts(data, issuedData, fillData);
+        window.matchMedia('(prefers-color-scheme: dark)')
+            .addEventListener('change', () => renderCharts(data, issuedData, fillData));
+
+    } catch (error) {
+        // Handle any errors during data loading or chart creation
+        console.error('Error loading data:', error);
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('error').style.display = 'block';
+    }
+}
+
+/**
+ * Create (or re-create) all charts with colors for the current theme
+ *
+ * @param {Array<Object>} data - Parsed time-series data
+ * @param {Array<Object>} issuedData - Rows from issued_by_quarter.csv
+ * @param {Array<Object>} fillData - Rows from fills_by_batch.csv
+ */
+function renderCharts(data, issuedData, fillData) {
+    // Remove existing charts so their canvases can be reused
+    document.querySelectorAll('#charts canvas').forEach(canvas => {
+        const existing = Chart.getChart(canvas);
+        if (existing) {
+            existing.destroy();
+        }
+    });
+
+    try {
         // Basic line charts showing trends over time
         // Chart 1: Waitlist Size - Shows total pending requests by block size over time
         createChart('waitlistChart', 'Current Waitlist Size Over Time', data, {
@@ -1543,11 +1573,8 @@ async function loadData() {
 
         // Chart 10: Age Distribution - Stacked bar chart showing request ages by CIDR size
         createAgeDistributionChart('ageDistributionChart', 'Current Request Age Distribution', data);
-
     } catch (error) {
-        // Handle any errors during data loading or chart creation
-        console.error('Error loading data:', error);
-        document.getElementById('loading').style.display = 'none';
+        console.error('Error creating charts:', error);
         document.getElementById('error').style.display = 'block';
     }
 }
