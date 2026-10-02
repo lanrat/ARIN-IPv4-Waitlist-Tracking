@@ -1261,7 +1261,9 @@ function createFlexibilityDistributionChart(canvasId, title, data) {
                                     const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
                                     return {
                                         text: `${label}: ${value} (${percentage}%)`,
+                                        fontColor: themeColors.text,  // Custom labels don't inherit labels.color
                                         fillStyle: data.datasets[0].backgroundColor[i],
+                                        strokeStyle: data.datasets[0].borderColor[i],
                                         hidden: false,
                                         index: i
                                     };
